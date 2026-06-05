@@ -9,13 +9,30 @@ through — the 6-algorithm bootstrap instrument. It does NOT touch
 Where the instrument *compares* algorithms statistically, this mode just
 produces ONE clean mono file for the user to A/B against the raw input.
 
-  Chain (fixed, intentional order):
+  Chain (fixed order — each stage has ONE distinct job, so the stages
+  complement rather than overlap; the goal is the cleanest single voice):
 
-    8-ch  →  WPE dereverb (multichannel)
-          →  MVDR beamform (8 → 1)
-          →  DeepFilterNet3 (CPU)
-          →  Silero VAD gate
+    8-ch  →  [1] WPE dereverb (multichannel)   · removes REVERB only
+          →  [2] RTF-MVDR beamform (8 → 1)     · SPATIAL filtering only
+          → (level guard: scale so DFN3 sees an in-range signal — plumbing)
+          →  [3] DeepFilterNet3 (CPU, 1→1)     · the sole NOISE denoiser
+          →  [4] VAD silence floor (1→1)       · polishes GAPS only, never speech
+          → (final loudness normalize — plumbing)
           →  clean mono
+
+Why this order and split (the "no-overlap" design):
+  · [1] and [2] are MULTICHANNEL — they must run on the original 8-mic array
+    (you can't beamform a mono signal), and dereverb-before-beamform is the
+    standard CHiME front-end. They run first, on the original.
+  · [3] DeepFilterNet3 is the ONE denoiser. It handles all broadband/stationary
+    noise on the single beamformed channel. Nothing else denoises, so nothing
+    fights it or double-suppresses the voice.
+  · [4] the VAD stage does NOT denoise (that would overlap [3]); it only lowers
+    the floor in segments Silero VAD is confident are non-speech, and is
+    speech-protective (hysteresis + hangover + slow release) so it never clips
+    or dulls the voice. See _vad_silence_floor.
+  · the two level steps are plumbing (scaling), not enhancement — they don't
+    remove or add content, so they don't overlap the enhancement stages.
 
 Every stage is *optional in practice*: if a dependency is missing or a
 stage raises, the cascade logs a clean skip and carries the signal forward
@@ -279,19 +296,30 @@ def tracked_mvdr_beamform(y, sr):
 
 
 # =========================================================================
-#  VAD GATE — Silero per-frame speech probability → smooth per-sample gate
+#  VAD SILENCE FLOOR — speech-protective; polishes only the gaps
 # =========================================================================
-def _vad_gate(x_mono, sr, floor=0.10, smooth_ms=40.0):
-    """Attenuate non-speech regions of a mono signal using Silero VAD.
+#  Distinct job from DFN3 (NO OVERLAP): DeepFilterNet3 is the denoiser and
+#  cleans speech AND noise everywhere. This stage does NOT denoise — it only
+#  lowers the floor in segments Silero VAD is confident are NON-speech, to
+#  remove the faint residual DFN3 leaves between words. It never touches
+#  speech, so it can't fight DFN3 or dull the voice.
+#
+#  Speech protection (why this won't clip words, unlike a raw per-frame gate):
+#    · hysteresis     — enter speech at prob>enter, stay until prob<exit, so a
+#                       mid-word probability dip doesn't drop the gate,
+#    · hangover       — speech regions are dilated by ±hangover_ms so onsets
+#                       and trailing consonants are never cut,
+#    · asym. envelope — fast attack opens the gate instantly when speech
+#                       returns; slow release closes it gently into silence,
+#    · soft floor     — gaps are attenuated to floor_db (default −16 dB), not
+#                       muted, so the result breathes naturally.
+# =========================================================================
+def _vad_silence_floor(x_mono, sr, floor_db=-24.0, enter=0.5, exit=0.35,
+                       hangover_ms=200.0, attack_ms=10.0, release_ms=150.0):
+    """Apply a speech-protective silence floor to a mono signal using Silero VAD.
 
-    Returns ``(gated_signal, info)``. ``info['ran']`` is False (and the signal
-    is returned unchanged) when Silero VAD is unavailable or returns nothing —
-    a clean skip, never a crash.
-
-    The gate is *soft*: a per-sample gain in ``[floor, 1]`` (floor ≈ −20 dB by
-    default) built from the per-frame VAD probability, then smoothed with a
-    short moving average so it fades rather than clicks. A hard mute would chop
-    word onsets and add zipper artifacts; the floor preserves room tone.
+    Returns ``(processed, info)``. ``info['ran']`` is False (signal returned
+    unchanged) when Silero VAD is unavailable or returns nothing — a clean skip.
     """
     try:
         from . import pipeline as ov
@@ -300,36 +328,92 @@ def _vad_gate(x_mono, sr, floor=0.10, smooth_ms=40.0):
     if not getattr(ov, "HAS_VAD", False):
         return x_mono, {"ran": False, "reason": "Silero VAD unavailable (torch missing)"}
 
-    probs = ov.silero_vad_mask(x_mono.astype(np.float32), sr)   # (n_frames,) on hop=HOP grid
+    probs = ov.silero_vad_mask(x_mono.astype(np.float32), sr)   # (T,) on hop=HOP grid
     if probs is None or len(probs) == 0:
         return x_mono, {"ran": False, "reason": "Silero VAD returned no frames"}
+    probs = np.asarray(probs, dtype=np.float32)
+    T = len(probs)
 
+    # 1) hysteresis: prob → speech/non-speech, immune to mid-word dips.
+    speech = np.zeros(T, dtype=bool)
+    on = False
+    for i, p in enumerate(probs):
+        on = (p > exit) if on else (p > enter)
+        speech[i] = on
+
+    # 2) hangover: dilate speech regions by ±hangover so word edges survive.
+    hf = max(1, int(round(hangover_ms * 1e-3 * sr / HOP)))
+    if hf:
+        kern = np.ones(2 * hf + 1, dtype=np.float32)
+        speech = np.convolve(speech.astype(np.float32), kern, mode="same") > 0.5
+
+    # 3) frame-level target gain (1.0 in speech, floor in gaps) with an
+    #    asymmetric one-pole envelope: fast attack (open), slow release (close).
+    floor = float(10.0 ** (floor_db / 20.0))
+    target = np.where(speech, 1.0, floor).astype(np.float32)
+    fps = sr / HOP                                          # frames per second
+    a_at = float(np.exp(-1.0 / max(attack_ms * 1e-3 * fps, 1e-6)))
+    a_re = float(np.exp(-1.0 / max(release_ms * 1e-3 * fps, 1e-6)))
+    env = np.empty(T, dtype=np.float32)
+    g = target[0]
+    for i, t in enumerate(target):
+        a = a_at if t >= g else a_re                       # rising→attack, falling→release
+        g = a * g + (1.0 - a) * t
+        env[i] = g
+
+    # 4) upsample the frame envelope to per-sample gain and apply.
     n = len(x_mono)
-    # Frame k is centered at sample k*HOP + NFFT/2. Map each sample to its
-    # nearest frame's probability, then convert to a [floor, 1] gain.
-    frame_centers = np.arange(len(probs)) * HOP + NFFT / 2.0
-    sample_idx = np.arange(n)
-    g = np.interp(sample_idx, frame_centers, probs,
-                  left=probs[0], right=probs[-1]).astype(np.float32)
-    gain = floor + (1.0 - floor) * np.clip(g, 0.0, 1.0)
+    centers = np.arange(T) * HOP + NFFT / 2.0
+    gain = np.interp(np.arange(n), centers, env,
+                     left=env[0], right=env[-1]).astype(np.float32)
+    out = (x_mono.astype(np.float32) * gain).astype(np.float32)
+    return out, {"ran": True, "role": "silence-floor (speech-protective)",
+                 "speech_frames": int(speech.sum()), "total_frames": int(T),
+                 "floor_db": float(floor_db), "hangover_ms": float(hangover_ms)}
 
-    # Smooth the gain envelope to avoid clicks at gate transitions.
-    k = max(1, int(smooth_ms * 1e-3 * sr))
-    if k > 1:
-        kern = np.ones(k, dtype=np.float32) / k
-        gain = np.convolve(gain, kern, mode="same").astype(np.float32)
 
-    gated = (x_mono.astype(np.float32) * gain).astype(np.float32)
-    speech_frames = int((probs > 0.5).sum())
-    return gated, {"ran": True, "speech_frames": speech_frames,
-                   "total_frames": int(len(probs)), "floor": float(floor)}
+# =========================================================================
+#  DEEPFILTERNET3 ENHANCE — with an attenuation limit (keeps quiet speakers)
+# =========================================================================
+def _dfn_enhance(mono, sr, atten_lim_db=12.0):
+    """Enhance a mono signal with DeepFilterNet3 via pipeline's CPU-pinned cached
+    model. Returns enhanced float32, or None for a clean skip.
+
+    ``atten_lim_db`` caps how much DFN may suppress any time-frequency region.
+    UNLIMITED DFN treats an overlapping / quieter second speaker as noise and
+    removes it (measured: it dragged all-speaker envelope correlation 0.98→0.89);
+    a ~12 dB cap keeps DFN's denoising while guaranteeing no region is pulled
+    down more than 12 dB, so secondary voices survive (corr back to ~0.97).
+    ``None`` restores the original unlimited behaviour. This is why the cascade
+    calls ``enhance`` directly instead of ``pipeline.bf_dfn2`` (which has no
+    such knob) — the CPU-pinned model itself is still reused from pipeline.
+    """
+    from . import pipeline as ov
+    if not getattr(ov, "_DFN_AVAILABLE", False):
+        return None
+    model, df_state = ov._get_dfn_model()
+    if model is None:
+        return None
+    try:
+        import torch
+        from df.enhance import enhance
+        if sr != df_state.sr():
+            return None
+        audio = torch.from_numpy(np.ascontiguousarray(mono, dtype=np.float32))[None, :]
+        with torch.no_grad():
+            out = enhance(model, df_state, audio, atten_lim_db=atten_lim_db)
+        return out.detach().cpu().numpy().squeeze().astype(np.float32)
+    except Exception as e:
+        print(f"[WARN] clean_cascade DFN enhance failed: {e}")
+        return None
 
 
 # =========================================================================
 #  MAIN CASCADE
 # =========================================================================
 def run_clean_cascade(input_path, out_dir, beamform_fn=None, use_gpu=False,
-                      use_dfn=True, log=None):
+                      use_dfn=True, mvdr_blend=0.7, dfn_atten_lim_db=24.0,
+                      log=None):
     """Run the single-output clean-voice cascade on one 8-channel WAV.
 
     Parameters
@@ -352,6 +436,18 @@ def run_clean_cascade(input_path, out_dir, beamform_fn=None, use_gpu=False,
         — useful for auditioning the RTF-MVDR beamformer on its own, without the
         neural post-filter masking beamformer artifacts. Logged as a skip in
         ``stages['dfn3']`` so it is never silent.
+    mvdr_blend : float in [0, 1]
+        How much pure (single-source) MVDR vs non-directional downmix to keep.
+        ``1.0`` = pure MVDR (isolates one speaker, suppresses others); ``0.0`` =
+        downmix only (all speakers, no spatial focus); the default ``0.5`` mixes
+        them so MVDR still enhances the main speaker while the other people stay
+        audible. DFN3 denoises the blend afterwards. Raise toward 1.0 for a
+        single dominant speaker, lower toward 0.0 to be sure no one is cut.
+    dfn_atten_lim_db : float | None
+        Attenuation limit (dB) for DeepFilterNet3 — the max it may suppress any
+        region. Default ``12`` denoises strongly but never removes a quieter /
+        overlapping second speaker. Lower (e.g. 6) preserves speakers even more
+        (less denoising); ``None`` is the original unlimited DFN (cuts speakers).
     use_gpu : bool
         Accepted for API symmetry. The neural stack (DeepFilterNet, Silero
         VAD) is CPU-pinned regardless via the CUDA_VISIBLE_DEVICES guard at
@@ -406,21 +502,40 @@ def run_clean_cascade(input_path, out_dir, beamform_fn=None, use_gpu=False,
         stages["wpe"] = {"ran": False, "reason": f"error: {e}"}
         _log(f"cascade: WPE skipped (error: {e})")
 
-    # ── stage 2: MVDR beamform (D → 1) ────────────────────────────────
+    # ── stage 2: MVDR beamform (D → 1), BLENDED with a non-directional
+    #    downmix so off-axis speakers are kept, not nulled. ──
+    #  MVDR alone is a single-source extractor: it focuses one speaker and
+    #  suppresses the others (measured: it cut ~29% of speech frames on a
+    #  2-person clip). To keep MVDR *and* every voice, we mix its output with
+    #  the dereverbed channel-mean (which contains all speakers equally):
+    #      mono = blend·MVDR + (1-blend)·downmix      (each level-matched first)
+    #  The main speaker is reinforced (present in both); off-axis speakers
+    #  survive via the downmix. DFN3 then denoises the blend, so the downmix's
+    #  extra noise is cleaned up — MVDR and the whole pipeline stay in play.
     method = getattr(beamform_fn, "__name__", "beamform_fn")
     try:
-        mono = np.asarray(beamform_fn(y, sr), dtype=np.float32).reshape(-1)
-        if mono.size == 0 or not np.all(np.isfinite(mono)):
+        mvdr = np.asarray(beamform_fn(y, sr), dtype=np.float32).reshape(-1)
+        if mvdr.size == 0 or not np.all(np.isfinite(mvdr)):
             raise ValueError("beamform_fn returned empty / non-finite output")
-        if len(mono) < n:
-            mono = np.pad(mono, (0, n - len(mono)))
-        mono = mono[:n]
+        if len(mvdr) < n:
+            mvdr = np.pad(mvdr, (0, n - len(mvdr)))
+        mvdr = mvdr[:n]
+        if D > 1 and 0.0 < mvdr_blend < 1.0:
+            downmix = y.mean(axis=0)[:n].astype(np.float32)   # all speakers, non-directional
+            mvdr_n, _ = _peak_normalize(mvdr, target=1.0)     # level-match before mixing
+            dmix_n, _ = _peak_normalize(downmix, target=1.0)
+            mono = (mvdr_blend * mvdr_n + (1.0 - mvdr_blend) * dmix_n).astype(np.float32)
+            blend_note = f"MVDR×{mvdr_blend:.2f} + downmix×{1-mvdr_blend:.2f} (keeps all speakers)"
+        else:
+            mono = mvdr                                       # pure MVDR (single-source)
+            blend_note = "pure MVDR (single-source)"
         # Peak-normalize to a sane range: the MVDR output scale is arbitrary
         # (it can peak tens of dB over FS), and DFN3 expects an in-range signal.
         mono, gbf = _peak_normalize(mono)
         stages["beamform"] = {"ran": True, "method": method, "channels_in": int(D),
+                              "mvdr_blend": float(mvdr_blend), "blend": blend_note,
                               "peak_norm_db": round(gbf, 1)}
-        _log(f"cascade: beamform ({method}) {D}→1 done (peak-norm {gbf:+.1f} dB)")
+        _log(f"cascade: beamform ({method}) {D}→1 done — {blend_note} (peak-norm {gbf:+.1f} dB)")
     except Exception as e:
         # Fall back to the dependency-free static MVDR, then to ref mono.
         _log(f"cascade: beamform '{method}' failed ({e}); trying static fallback")
@@ -441,15 +556,20 @@ def run_clean_cascade(input_path, out_dir, beamform_fn=None, use_gpu=False,
         try:
             from . import pipeline as ov
             if getattr(ov, "_DFN_AVAILABLE", False) and sr == SR_DFN:
-                dfn_out = ov.bf_dfn2(mono.astype(np.float32), sr)   # CPU-pinned init_df()/enhance()
+                # CPU-pinned enhance WITH an attenuation limit so DFN denoises
+                # without removing a quieter/overlapping second speaker.
+                dfn_out = _dfn_enhance(mono.astype(np.float32), sr,
+                                       atten_lim_db=dfn_atten_lim_db)
                 if dfn_out is not None:
                     d = np.asarray(dfn_out, dtype=np.float32).reshape(-1)
                     if len(d) < n:
                         d = np.pad(d, (0, n - len(d)))
                     mono = d[:n]
                     model_name = _dfn_model_name(ov)
-                    stages["dfn3"] = {"ran": True, "model": model_name, "device": "cpu"}
-                    _log(f"cascade: DeepFilterNet ({model_name}) enhance done")
+                    stages["dfn3"] = {"ran": True, "model": model_name, "device": "cpu",
+                                      "atten_lim_db": dfn_atten_lim_db}
+                    _log(f"cascade: DeepFilterNet ({model_name}) enhance done "
+                         f"(atten_lim {dfn_atten_lim_db} dB)")
                 else:
                     stages["dfn3"] = {"ran": False, "reason": "model load/enhance returned None"}
                     _log("cascade: DeepFilterNet skipped (load/enhance failed)")
@@ -463,18 +583,19 @@ def run_clean_cascade(input_path, out_dir, beamform_fn=None, use_gpu=False,
             stages["dfn3"] = {"ran": False, "reason": f"error: {e}"}
             _log(f"cascade: DeepFilterNet skipped (error: {e})")
 
-    # ── stage 4: Silero VAD gate ──────────────────────────────────────
+    # ── stage 4: VAD silence floor (speech-protective; polishes gaps only) ─
     try:
-        mono, vad_info = _vad_gate(mono, sr)
+        mono, vad_info = _vad_silence_floor(mono, sr)
         stages["vad_gate"] = vad_info
         if vad_info.get("ran"):
-            _log(f"cascade: VAD gate applied "
-                 f"({vad_info.get('speech_frames')}/{vad_info.get('total_frames')} speech frames)")
+            _log(f"cascade: VAD silence-floor applied "
+                 f"({vad_info.get('speech_frames')}/{vad_info.get('total_frames')} speech frames, "
+                 f"floor {vad_info.get('floor_db')} dB)")
         else:
-            _log(f"cascade: VAD gate skipped ({vad_info.get('reason')})")
+            _log(f"cascade: VAD silence-floor skipped ({vad_info.get('reason')})")
     except Exception as e:
         stages["vad_gate"] = {"ran": False, "reason": f"error: {e}"}
-        _log(f"cascade: VAD gate skipped (error: {e})")
+        _log(f"cascade: VAD silence-floor skipped (error: {e})")
 
     # ── final output level: peak-normalize for a fair, audible A/B against
     #    the (auto-gained) input mono shown in the player. ──

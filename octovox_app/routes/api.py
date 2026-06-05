@@ -18,6 +18,7 @@ from werkzeug.utils import secure_filename
 from ..config import INPUT_DIR, OUTPUT_DIR, ASSET_DIR, STATIC_DIR
 from ..services import pipeline as ov
 from ..services import clean_cascade as cascade
+from ..services import prod_pipeline as prod
 from ..services.verdicts import collect_verdicts
 from ..utils.audio import wav_info
 from ..utils.files import safe_input_name
@@ -522,20 +523,36 @@ def process_poll_legacy():
 
 @api_bp.route("/clean", methods=["POST"])
 def clean_voice():
-    """Single-output clean-voice cascade (NEW mode, separate from the
-    6-algorithm bootstrap instrument).
+    """Production voice pipeline (the app's primary clean-voice path).
 
-    Body: ``{"filename": "<input.wav>"}``. Runs
-    ``8-ch → WPE → MVDR(8→1) → DeepFilterNet3 (CPU) → Silero VAD gate``
-    and writes one clean mono WAV beside the instrument's outputs.
+    Body: ``{"filename": "<input.wav>", ...knobs}``. Runs the 11-stage
+    production chain (``prod_pipeline.run_production``):
+    ``calibrate → HPF/noise-floor → WPE → VAD → DOA → MVDR(8→1) → AEC →
+    NR → automix → AGC/EQ/limiter → clean WAV`` and writes one clean mono
+    ``clean_prod.wav`` beside the per-recording outputs.
 
-    Returns ``{ok, clean, stages, sr, n_channels, elapsed_s}`` where ``clean``
-    is a URL served by the existing ``/output/<path>`` route. ``stages`` is the
-    per-stage ran/skip report so a skipped DFN3 / VAD stage is never silent.
+    Returns ``{ok, clean, stages, timings, sr, n_channels, elapsed_s}`` where
+    ``clean`` is served by ``/output/<path>``. ``stages`` is the per-stage
+    ran/skip report and ``timings`` is the per-stage wall-clock (ms) so a skip
+    is never silent and the time budget is measurable.
 
-    The beamformer is the repo's validated tracked RTF-MVDR (Sprint-B,
-    moving-speaker), wrapped behind the cascade's ``beamform_fn`` contract;
-    it self-falls-back to the compact static MVDR if the tracked path errors.
+    Speed-first knobs (all optional):
+      · ``nr``   : "fast" (Wiener, default, no neural cost) | "dfn" (DeepFilterNet3,
+                   best quality but the slow stage) | "none".
+      · ``beam`` : "auto" (default — tracked if the talker moved, else batch) |
+                   "batch" | "tracked".
+      · ``wpe``  : WPE dereverb front-end (default FALSE — it is the slow stage;
+                   enable for a quality dereverb pass).
+      · ``eq``   : apply the speech EQ (default true).
+      · ``agc``  : "perceptual" (default — K-weighted attack/release loudness) |
+                   "rms" (instantaneous RMS to target).
+      · ``aec``  : "partitioned" (default — multi-tap, long echo tail) | "single"
+                   (one-tap NLMS). Only active with a ``reference`` WAV.
+      · ``movement`` : "srp" (default — SRP-PHAT azimuth, readout only) | "rtf"
+                   (RTF-drift; in beam="auto" it switches to the tracked beam on
+                   sustained movement).
+      · ``mvdr_blend`` (0..1, keeps off-axis speakers), ``dfn_atten_lim_db``,
+        and ``reference`` (filename of an optional far-end ref WAV for AEC).
     """
     data = request.get_json(force=True, silent=True) or {}
     fname = data.get("filename")
@@ -544,27 +561,134 @@ def clean_voice():
     wav_path = INPUT_DIR / secure_filename(fname)
     if not wav_path.exists():
         return jsonify(ok=False, error=f"file not found: {fname}"), 404
-    # DeepFilterNet3 is ON by default for the clean-voice cascade (this is where
-    # the neural cleanup belongs — it was removed from the analysis leaderboard).
-    # Set use_dfn=false in the body to audition the RTF-MVDR beamformer alone
-    # (WPE → MVDR → VAD gate, no neural post-filter).
-    use_dfn = bool(data.get("use_dfn", True))
+
+    nr = str(data.get("nr", "dfn")).lower()
+    if nr not in ("fast", "dfn", "none"):
+        nr = "dfn"
+    beam = str(data.get("beam", "auto")).lower()
+    if beam not in ("auto", "batch", "tracked"):
+        beam = "auto"
+    wpe = bool(data.get("wpe", False))   # off in the fast path; opt-in quality dereverb
+    eq = bool(data.get("eq", True))
+    agc = str(data.get("agc", "perceptual")).lower()
+    if agc not in ("perceptual", "rms"):
+        agc = "perceptual"
+    aec = str(data.get("aec", "partitioned")).lower()
+    if aec not in ("partitioned", "single"):
+        aec = "partitioned"
+    movement = str(data.get("movement", "srp")).lower()
+    if movement not in ("srp", "rtf"):
+        movement = "srp"
     try:
-        # Batch (reference-normalized) RTF-MVDR is the better beamformer on this
-        # dataset — the instrument's bootstrap ranks it above the tracked variant
-        # on ~15/21 recordings (stationary / slow-moving sources). Pass
-        # tracked_mvdr_beamform instead for genuinely fast-moving speakers.
-        result = cascade.run_clean_cascade(
-            wav_path, OUTPUT_DIR,
-            beamform_fn=cascade.batch_mvdr_beamform,
-            use_dfn=use_dfn, use_gpu=False)
+        mvdr_blend = max(0.0, min(1.0, float(data.get("mvdr_blend", 0.6))))
+    except (TypeError, ValueError):
+        mvdr_blend = 0.6
+    if "dfn_atten_lim_db" in data and data.get("dfn_atten_lim_db") is None:
+        dfn_atten_lim_db = None
+    else:
+        try:
+            dfn_atten_lim_db = float(data.get("dfn_atten_lim_db", 24.0))
+        except (TypeError, ValueError):
+            dfn_atten_lim_db = 24.0
+    # Optional far-end reference for stage [7] AEC (else AEC is a clean skip).
+    ref_path = None
+    ref_name = data.get("reference")
+    if ref_name:
+        cand = INPUT_DIR / secure_filename(ref_name)
+        if cand.exists():
+            ref_path = cand
+
+    try:
+        result = prod.run_production(
+            wav_path, OUTPUT_DIR, reference_path=ref_path,
+            nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
+            mvdr_blend=mvdr_blend, wpe=wpe, eq=eq, agc=agc, aec=aec, movement=movement)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
+        input_url = f"/output/{result['stem']}/{result['input_name']}"
         return jsonify(ok=True,
                        clean=clean_url,
+                       input=input_url,
+                       stem=result["stem"],
                        stages=result["stages"],
+                       timings=result["timings"],
                        sr=result["sr"],
                        n_channels=result["n_channels"],
                        elapsed_s=result["elapsed_s"])
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.route("/devices_out")
+def list_output_devices():
+    """List output-capable audio devices for stage [11] playout (USB/analog).
+    Mirrors ``/api/devices`` but filters on output channels."""
+    try:
+        import sounddevice as sd
+        try:
+            sd._terminate(); sd._initialize()
+        except Exception:
+            pass
+        devs = sd.query_devices()
+        try:
+            default_out = sd.default.device[1]
+        except Exception:
+            default_out = None
+        out = []
+        for i, d in enumerate(devs):
+            if d.get("max_output_channels", 0) >= 1:
+                out.append({
+                    "index"        : i,
+                    "name"         : d["name"],
+                    "max_output_ch": int(d["max_output_channels"]),
+                    "default_sr"   : int(d.get("default_samplerate", 0) or 0),
+                    "is_default"   : (i == default_out),
+                })
+        return jsonify(ok=True, devices=out, default=default_out)
+    except ImportError:
+        return jsonify(ok=False,
+            error="sounddevice not installed. Run: pip3 install sounddevice")
+    except Exception as e:
+        return jsonify(ok=False, error=str(e))
+
+
+@api_bp.route("/playout", methods=["POST"])
+def playout():
+    """Play a produced clean WAV to a chosen output device (USB / analog).
+
+    Body: ``{"stem": "<recording>", "device": <index|null>, "name": "clean_prod.wav"}``.
+    Streams the file to the selected ``sounddevice`` output (non-blocking).
+    Real Dante/AVB transports need vendor hardware SDKs — out of scope here;
+    this covers the USB / analog output the OS exposes.
+    """
+    data = request.get_json(silent=True) or {}
+    stem = data.get("stem")
+    if not stem:
+        return jsonify(ok=False, error="stem required"), 400
+    name = secure_filename(data.get("name") or "clean_prod.wav")
+    p = OUTPUT_DIR / secure_filename(stem) / name
+    if not p.exists():
+        return jsonify(ok=False, error=f"clean file not found: {stem}/{name}"), 404
+    device = data.get("device")
+    if device in ("", None):
+        device = None
+    else:
+        try: device = int(device)
+        except (TypeError, ValueError): device = None
+    try:
+        import sounddevice as sd
+        fs, audio = wavfile.read(str(p))
+        if np.issubdtype(audio.dtype, np.integer):
+            audio = audio.astype(np.float32) / float(np.iinfo(audio.dtype).max)
+        else:
+            audio = audio.astype(np.float32)
+        sd.stop()
+        sd.play(audio, samplerate=int(fs), device=device, blocking=False)
+        return jsonify(ok=True, playing=f"{stem}/{name}", device=device,
+                       sr=int(fs), duration_s=round(len(audio) / float(fs), 2))
+    except ImportError:
+        return jsonify(ok=False,
+            error="sounddevice not installed. Run: pip3 install sounddevice")
     except Exception as e:
         traceback.print_exc()
         return jsonify(ok=False, error=str(e)), 500

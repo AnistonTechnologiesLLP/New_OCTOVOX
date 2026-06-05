@@ -119,8 +119,8 @@ window.addEventListener("DOMContentLoaded", () => {
   setupFilesPanel();
   setupVerdictRefresh();
   loadDevices();
+  loadOutputDevices();
   refreshFiles();
-  loadVerdict();
 });
 
 
@@ -128,17 +128,10 @@ window.addEventListener("DOMContentLoaded", () => {
 function setupHeroTypewriter() {
   const el = $("heroTagText");
   if (!el) return;
-  const env = window.OCTOVOX_ENV || {};
-  const sota = env.has_wpe && env.has_vad;
-  const n = sota ? 5 : 4;
   const MSGS = [
-    `Capture or upload a multichannel recording. Get the cleanest speech possible — automatically.`,
-    `<b style="color:var(--teal)">${n} beamforming algorithms</b> compete on every recording. A bootstrap test picks the winner.`,
-    `Direction of arrival, beampatterns, frequency-band SNR — every algorithm visualised side-by-side.`,
-    sota
-      ? `<b style="color:var(--violet)">Neural-MVDR-WPE</b> brings WPE dereverberation + Silero VAD + MVDR — the CHiME-challenge SOTA pipeline.`
-      : `Three classical beamformers — MVDR, GEV+BAN, SDW-MWF — battle-tested on real audio.`,
-    `Statistically validated — a <b style="color:var(--teal)">500-iteration bootstrap</b> declares the winner only when it's truly consistent.`,
+    `An <b style="color:var(--teal)">11-stage production pipeline</b> turns 8 raw mic channels into one clean voice — in a fraction of real-time.`,
+    `Channel calibration → high-pass → VAD → DOA → <b style="color:var(--teal)">MVDR beamforming</b> → AEC → noise reduction → automix → AGC / EQ / limiter.`,
+    `<b style="color:var(--violet)">DeepFilterNet3</b> does the denoising — natural-sounding voice with no robotic, musical-noise artifacts.`,
     `Built for the <b style="color:var(--teal)">sensiBel SB-POLARIS</b> 8-mic optical MEMS array — 48 kHz, 24-bit.`,
   ];
   let idx = 0, char = 0, deleting = false, paused = false, plain = null;
@@ -606,83 +599,14 @@ function setupSamplePanel() {
 
 
 /* ═══════════════════ PROCESS STREAM ═══════════════════ */
+/**
+ * Per-file primary action. The app's running pipeline is now the production
+ * voice chain (POST /api/clean → prod_pipeline.run_production), so "analyse"
+ * cleans the voice and shows the stages + timing. Kept named ``processFile``
+ * because every caller (row ▶, Run-all, post-upload auto-run) invokes it.
+ */
 async function processFile(filename) {
-  if (!filename) {
-    toast("processFile called with no filename.", "error");
-    return;
-  }
-  if (!Busy.acquire(`analysing ${filename}`)) return;
-  showProgress("Starting analysis…");
-
-  // Stall watchdog: if no progress event arrives for 30s, reassure the user;
-  // after 90s, suggest checking the terminal. Reset on every event.
-  let stallTimer = null;
-  let stallLevel = 0;
-  const resetStall = () => {
-    if (stallTimer) clearTimeout(stallTimer);
-    stallLevel = 0;
-    const tick = () => {
-      stallLevel++;
-      if (stallLevel === 1) {
-        toast("⏳ Still working — heavy bootstrap step can take a moment.", "warn");
-        stallTimer = setTimeout(tick, 60000); // next warning after 60s
-      } else if (stallLevel === 2) {
-        toast("⚠ Analysis stalled >90s with no progress. Check the server terminal for errors.", "error");
-      }
-    };
-    stallTimer = setTimeout(tick, 30000);
-  };
-  resetStall();
-
-  try {
-    const r = await fetch("/api/process", {
-      method: "POST", headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({
-        filename, geometry: "uca_polaris_40mm",
-        post_filter: "wiener",
-        use_dfn: window.OCTOVOX_ENV.has_dfn,
-        n_bootstrap: 500,
-      })
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status} from /api/process`);
-
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "", lastDone = null;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).trim();
-        buf = buf.slice(nl + 1);
-        if (!line) continue;
-        let ev;
-        try { ev = JSON.parse(line); } catch { continue; }
-        resetStall();
-        if (ev.type === "progress") updateProgress(ev.message, ev.pct);
-        else if (ev.type === "done") lastDone = ev;
-        else if (ev.type === "error") throw new Error(ev.message);
-      }
-      if (lastDone) break;
-    }
-    if (!lastDone) throw new Error("Pipeline ended without a completion event");
-    hideProgress();
-    await showResults(lastDone.stem);
-    refreshFiles();
-    loadVerdict();
-    toast(`Analysis complete: winner ${lastDone.winner || "computed"} ✓`);
-    return true;
-  } catch (err) {
-    console.error("[processFile]", err);
-    hideProgress();
-    toast(`Processing failed: ${err.message || "unknown error"}`, "error");
-    return false;
-  } finally {
-    if (stallTimer) clearTimeout(stallTimer);
-    Busy.release();
-  }
+  return runProduction(filename);
 }
 
 function showProgress(msg) {
@@ -1118,70 +1042,118 @@ async function clearAllOutput() {
 }
 
 
-/* ═══════════════════ RESULTS ═══════════════════ */
-async function showResults(stem) {
-  let m;
+/* ═══════════════════ RESULTS (production) ═══════════════════ */
+
+/** Read the current pipeline control knobs from the results panel. */
+function getProdOpts() {
+  return {
+    nr:   ($("prodNr")   || {}).value || "fast",
+    beam: ($("prodBeam") || {}).value || "auto",
+    agc:  ($("prodAgc")  || {}).value || "perceptual",
+    aec:  ($("prodAec")  || {}).value || "partitioned",
+    movement: ($("prodMovement") || {}).value || "srp",
+    wpe:  !!($("prodWpe") && $("prodWpe").checked),
+    eq:    ($("prodEq") ? $("prodEq").checked : true),
+  };
+}
+
+/**
+ * Run the production voice pipeline on one file and render the result:
+ * raw-vs-clean A/B players + the per-stage ran/skip + timing table. This is
+ * the app's running pipeline (POST /api/clean → run_production).
+ */
+async function runProduction(filename) {
+  if (!filename) { toast("runProduction called with no filename.", "error"); return false; }
+  if (!Busy.acquire(`cleaning ${filename}`)) return false;
+  const opts = getProdOpts();
+  showProgress(`Cleaning voice (${opts.nr})…`);
   try {
-    const r = await fetch(`/api/output_file/${stem}/metrics.json`);
-    m = await r.json();
+    const r = await fetch("/api/clean", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, ...opts }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    qsa(".ps").forEach(s => s.classList.add("done"));
+    hideProgress();
+    renderProduction(j);
+    refreshFiles();
+    const skipped = Object.entries(j.stages || {})
+      .filter(([, s]) => s && s.ran === false).map(([k]) => k);
+    toast(`Clean ready in ${j.elapsed_s}s` +
+          (skipped.length ? ` — skipped: ${skipped.join(", ")}` : " — all stages ran ✓"),
+          skipped.length ? "warn" : "ok");
+    return true;
   } catch (err) {
-    toast("Could not load results: " + err.message, "error");
-    return;
+    console.error("[runProduction]", err);
+    hideProgress();
+    toast(`Pipeline failed: ${err.message || "unknown error"}`, "error");
+    return false;
+  } finally {
+    Busy.release();
   }
+}
+
+/** Render the production result JSON into the results section. */
+function renderProduction(j) {
+  const stem = j.stem;
   state.currentStem = stem;
-  state.currentMetrics = m;
+  state.currentClean = j.clean;
 
   const res = $("results");
   res.classList.remove("hidden");
   $("navResults").removeAttribute("data-disabled");
-  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · ${m.duration_s.toFixed(1)} s · ${m.sample_rate_hz/1000} kHz`;
+  const dur = (j.stages && j.stages.mic_capsules && j.stages.mic_capsules.duration_s) || 0;
+  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · ${dur.toFixed(1)} s · ${(j.sr/1000)} kHz · ${j.n_channels} ch`;
 
-  const w = m.winner.winner;
-  $("winnerName").textContent = w;
-  $("winnerFormula").textContent = ALGO_INFO[w]?.formula || "";
-  $("wsConfidence").textContent = `${Math.round(m.winner.confidence_pct || 0)}%`;
-  const marg = m.winner.margin_db || 0;
-  $("wsMargin").textContent = (marg >= 0 ? "+" : "") + marg.toFixed(2) + " dB";
+  // Headline stats
+  const ran = Object.values(j.stages || {}).filter(s => s && s.ran).length;
+  const total = Object.keys(j.stages || {}).length;
+  const rtf = dur > 0 ? (j.elapsed_s / dur) : 0;
+  $("wsElapsed").textContent  = `${j.elapsed_s}s`;
+  $("wsStagesRan").textContent = `${ran}/${total}`;
+  $("wsRtf").textContent = rtf ? `${rtf.toFixed(2)}×` : "—";
 
-  $("downloadWinnerBtn").onclick = () => {
-    const fname = (m.file_map || {})[w];
-    if (fname) window.location.href = `/api/output_file/${stem}/${fname}`;
-  };
-  $("downloadReportBtn").onclick = () => {
-    window.open(`/api/output_file/${stem}/report.html`, "_blank");
-  };
-  $("cleanVoiceBtn").onclick = () => runCleanCascade(stem);
+  $("downloadWinnerBtn").onclick = () => { window.location.href = j.clean; };
+  const rerun = $("rerunProdBtn");
+  if (rerun) rerun.onclick = () => runProduction(`${stem}.wav`);
+  const pb = $("playoutBtn");
+  if (pb) pb.onclick = () => playToDevice(stem);
 
-  // DFN notice — only if DFN ran
-  const dfnNotice = $("dfnNotice");
-  if (m.deepfilternet_active && (m.file_map || {})["OCTOVOX-MAX (DFN)"]) {
-    dfnNotice.classList.remove("hidden");
-    $("downloadMaxBtn").onclick = () => {
-      const fname = m.file_map["OCTOVOX-MAX (DFN)"];
-      if (fname) window.location.href = `/api/output_file/${stem}/${fname}`;
-    };
-  } else {
-    dfnNotice.classList.add("hidden");
-  }
-
-  setupTrackPlayers(stem, m);
-  renderLeaderboard(m);
-  renderDoARadar(m);
-  renderBandChart(m);
+  loadABPlayers(j.input, j.clean,
+    `raw 8-ch downmix`,
+    `${opthLabel(getProdOpts())} · ${j.elapsed_s}s`);
+  renderProdStages(j.stages || {}, j.timings || {});
   res.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function setupTrackPlayers(stem, m) {
+function opthLabel(o) {
+  return `NR:${o.nr}${o.wpe ? " +WPE" : ""} · beam:${o.beam}${o.eq ? " · EQ" : ""}`;
+}
+
+/** Re-view a previously-cleaned file without re-running (loads output WAVs). */
+async function showResults(stem) {
+  $("results").classList.remove("hidden");
+  $("navResults").removeAttribute("data-disabled");
+  state.currentStem = stem;
+  const clean = `/output/${stem}/clean_prod.wav`;
+  state.currentClean = clean;
+  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · <span class="muted">re-run to refresh stage timings</span>`;
+  $("downloadWinnerBtn").onclick = () => { window.location.href = clean; };
+  if ($("rerunProdBtn")) $("rerunProdBtn").onclick = () => runProduction(`${stem}.wav`);
+  if ($("playoutBtn"))   $("playoutBtn").onclick = () => playToDevice(stem);
+  loadABPlayers(`/output/${stem}/input_mono.wav`, clean, "raw 8-ch downmix", "clean_prod.wav");
+  $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/** Load raw-input and clean URLs into the two A/B wavesurfer players. */
+function loadABPlayers(inputUrl, cleanUrl, inputSub, cleanSub) {
   if (state.wsInput)  { try { state.wsInput.destroy(); }  catch{} state.wsInput = null; }
   if (state.wsWinner) { try { state.wsWinner.destroy(); } catch{} state.wsWinner = null; }
 
-  const inputName = (m.file_map || {})["Input (ref-channel mono)"] || "00_input_mono.wav";
-  const winnerName = (m.file_map || {})[m.winner.winner];
+  $("trackInputSub").textContent = inputSub || "raw input";
+  $("trackWinnerSub").textContent = cleanSub || "clean";
 
-  $("trackInputSub").textContent = `${m.duration_s.toFixed(1)} s · ${m.channels} ch · ${m.sample_rate_hz/1000} kHz`;
-  $("trackWinnerSub").textContent = `${m.winner.winner} · margin ${(m.winner.margin_db>=0?'+':'') + (m.winner.margin_db || 0).toFixed(2)} dB`;
-
-  const url = fn => `/api/output_file/${stem}/${fn}`;
   state.wsInput = WaveSurfer.create({
     container: "#waveInput",
     waveColor: "rgba(168, 176, 196, 0.6)",
@@ -1189,7 +1161,7 @@ function setupTrackPlayers(stem, m) {
     height: 64, cursorColor: "rgba(255,255,255,0.3)",
     barWidth: 2, barGap: 1, barRadius: 1,
   });
-  state.wsInput.load(url(inputName));
+  if (inputUrl) state.wsInput.load(inputUrl);
 
   state.wsWinner = WaveSurfer.create({
     container: "#waveWinner",
@@ -1198,7 +1170,7 @@ function setupTrackPlayers(stem, m) {
     height: 64, cursorColor: "rgba(255,255,255,0.4)",
     barWidth: 2, barGap: 1, barRadius: 1,
   });
-  if (winnerName) state.wsWinner.load(url(winnerName));
+  if (cleanUrl) state.wsWinner.load(cleanUrl);
 
   qsa(".track-play").forEach(btn => {
     btn.textContent = "▶";
@@ -1229,92 +1201,89 @@ function setupTrackPlayers(stem, m) {
 }
 
 
-/**
- * Clean-voice cascade (NEW single-output mode, separate from the bootstrap
- * instrument). POSTs /api/clean, then loads the resulting clean mono into the
- * existing input-vs-winner player's WINNER slot so the user can A/B it against
- * the raw input. Surfaces which stages actually ran — a skipped DFN3 / VAD is
- * reported, never silent.
- */
-async function runCleanCascade(stem) {
-  if (!stem) return;
-  if (!Busy.acquire(`cleaning ${stem}`)) return;
-  const btn = $("cleanVoiceBtn");
-  const orig = btn ? btn.textContent : "";
-  if (btn) { btn.disabled = true; btn.textContent = "🧹 Cleaning…"; }
-  toast("🧹 Running clean-voice cascade (WPE → RTF-MVDR → DeepFilterNet3 → VAD gate)…");
+/* Friendly label + one-line detail for each production stage key. */
+const PROD_STAGE_LABELS = {
+  mic_capsules:   ["① Mic capsules",            s => `${s.n_channels} ch · ${s.sr/1000} kHz · ${s.duration_s}s`],
+  mic_health:     ["① Mic health",              s => s.ran ? (s.all_ok ? `all ${s.n_channels} mics OK` : `flagged ${(s.flagged_mics||[]).join(",")} · OK ${s.counts.OK}/${s.n_channels}`) : s.reason],
+  calibrate:      ["② Channel calibration",      s => s.ran ? `gains ${(s.gains_db||[]).map(g=>g.toFixed(1)).join("/")} dB` : s.reason],
+  highpass:       ["③ High-pass filter",         s => s.ran ? `${s.cutoff_hz} Hz · order ${s.order}` : s.reason],
+  noise_floor:    ["③ Noise-floor estimate",     s => s.ran ? `${s.noise_floor_dbfs} dBFS` : s.reason],
+  dereverb_wpe:   ["⑧ Dereverb (WPE front-end)", s => s.ran ? `taps ${s.taps} · iters ${s.iterations}` : s.reason],
+  vad:            ["④ VAD / speech detector",    s => s.ran ? `speech ${(s.speech_ratio*100).toFixed(0)}%` : s.reason],
+  doa:            ["⑤ DOA / talker tracking",    s => s.ran ? `az ${(s.az_per_block||[]).join("/")}° · spread ${s.az_spread_deg}°` : s.reason],
+  rtf_drift:      ["⑤ RTF-drift movement",        s => s.ran ? `steady ${s.steady_median} · ${s.moved?"moving → tracked":"static → batch"}` : s.reason],
+  beamform:       ["⑥ Beamforming (MVDR 8→1)",   s => s.ran ? `${(s.method||"").replace("_beamform","")} · ${s.blend||""}` : s.reason],
+  aec:            ["⑦ AEC (far-end ref)",        s => s.ran ? `ERLE ${s.erle_db} dB${s.n_taps?` · ${s.n_taps} taps`:""}` : s.reason],
+  feedback_risk:  ["⑦ Feedback / howl risk",     s => s.ran ? `${s.risk}${s.suspect_hz?` · ${s.suspect_hz} Hz`:""} (score ${s.risk_score})` : s.reason],
+  noise_reduction:["⑧ Noise reduction",          s => s.ran ? `${s.engine}` : s.reason],
+  automix:        ["⑨ Automix / gating",         s => s.ran ? `${s.speech_frames}/${s.total_frames} speech frames` : s.reason],
+  agc_eq_limiter: ["⑩ AGC + EQ + limiter",       s => s.ran ? `AGC ${(s.agc&&s.agc.engine)||"rms"}→${s.agc_target_dbfs} dBFS${s.eq&&s.eq.ran?" · EQ":""} · limit ${s.limiter_ceiling}` : s.reason],
+  output:         ["⑪ Output (WAV)",             s => s.ran ? `norm ${s.gain_db>=0?"+":""}${s.gain_db} dB` : s.reason],
+};
+
+/** Render the production stages + per-stage timing into the results table. */
+function renderProdStages(stages, timings) {
+  const tkey = { dereverb_wpe: "dereverb_wpe", noise_reduction: "nr",
+                 noise_floor: "noise_floor", agc_eq_limiter: "agc_eq_limiter" };
+  const rows = Object.entries(PROD_STAGE_LABELS).map(([key, [label, detail]]) => {
+    const s = stages[key];
+    if (!s) return "";
+    const ran = !!s.ran;
+    const ms = timings[tkey[key] || key];
+    const msTxt = (ms != null) ? `${ms} ms` : "";
+    let det = "";
+    try { det = detail(s) || ""; } catch { det = ""; }
+    return `
+      <div class="prod-stage ${ran ? "ran" : "skip"}">
+        <div class="psg-mark">${ran ? "✓" : "—"}</div>
+        <div class="psg-label">${esc(label)}</div>
+        <div class="psg-detail">${esc(String(det))}</div>
+        <div class="psg-time">${msTxt}</div>
+      </div>`;
+  }).join("");
+  const total = (timings.TOTAL != null) ? `${(timings.TOTAL/1000).toFixed(2)} s` : "";
+  $("leaderboard").innerHTML = rows +
+    `<div class="prod-stage prod-stage-total"><div class="psg-mark">Σ</div>
+      <div class="psg-label">Total</div><div class="psg-detail"></div>
+      <div class="psg-time">${total}</div></div>`;
+}
+
+/* ── Stage [11]: output-device playout (USB / analog) ── */
+async function loadOutputDevices() {
+  const sel = $("playoutDevice");
+  if (!sel) return;
   try {
-    const r = await fetch("/api/clean", {
+    const r = await fetch("/api/devices_out");
+    const j = await r.json();
+    if (!j.ok) { sel.innerHTML = `<option value="">Default output</option>`; return; }
+    sel.innerHTML = `<option value="">Default output</option>` +
+      (j.devices || []).map(d =>
+        `<option value="${d.index}"${d.is_default ? " selected" : ""}>${esc(d.name)} (${d.max_output_ch}ch)</option>`
+      ).join("");
+  } catch {
+    sel.innerHTML = `<option value="">Default output</option>`;
+  }
+}
+
+async function playToDevice(stem) {
+  if (!stem) return;
+  const sel = $("playoutDevice");
+  const device = sel && sel.value !== "" ? sel.value : null;
+  try {
+    const r = await fetch("/api/playout", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: `${stem}.wav` }),
+      body: JSON.stringify({ stem, device, name: "clean_prod.wav" }),
     });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-
-    // Load the clean mono into the WINNER slot (reuse the wavesurfer instance
-    // if the results player is already set up; otherwise create it).
-    const url = j.clean;
-    if (state.wsWinner) {
-      try { state.wsWinner.pause(); } catch {}
-      state.wsWinner.load(url);
-    } else {
-      state.wsWinner = WaveSurfer.create({
-        container: "#waveWinner",
-        waveColor: "rgba(45, 212, 191, 0.5)", progressColor: "#2DD4BF",
-        height: 64, cursorColor: "rgba(255,255,255,0.4)",
-        barWidth: 2, barGap: 1, barRadius: 1,
-      });
-      state.wsWinner.load(url);
-    }
-
-    const summary = summarizeCascadeStages(j.stages);
-    $("trackWinnerSub").textContent = `🧹 Clean cascade · ${summary.short}`;
-    const winnerNameEl = qs(".track-row-winner .track-name");
-    if (winnerNameEl) winnerNameEl.innerHTML = `<span class="winner-badge">🧹</span> CLEAN`;
-
-    // Scroll the listen card into view so the A/B player is front-and-centre.
-    const card = qs("#waveWinner").closest(".card");
-    if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
-
-    // Surface skipped stages explicitly (never a silent no-op).
-    if (summary.skipped.length) {
-      toast(`Clean ready in ${j.elapsed_s}s — skipped: ${summary.skipped.join(", ")}`, "warn");
-    } else {
-      toast(`Clean ready in ${j.elapsed_s}s — all stages ran (${summary.short}) ✓`);
-    }
+    toast(`🔊 Playing clean output to device${device!=null?` #${device}`:" (default)"} · ${j.duration_s}s`);
   } catch (err) {
-    console.error("[runCleanCascade]", err);
-    toast(`Clean-voice cascade failed: ${err.message || "unknown error"}`, "error");
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = orig; }
-    Busy.release();
+    toast(`Playout failed: ${err.message || "unknown error"}`, "error");
   }
 }
 
-/** Turn the cascade's stages dict into a short label + list of skipped stages. */
-function summarizeCascadeStages(stages) {
-  stages = stages || {};
-  const labels = {
-    wpe: "WPE", beamform: "MVDR", dfn3: "DFN3", vad_gate: "VAD",
-  };
-  const parts = [], skipped = [];
-  for (const [key, label] of Object.entries(labels)) {
-    const s = stages[key] || {};
-    const ran = !!s.ran;
-    let tag = label;
-    if (key === "beamform" && s.method) {
-      tag = /tracked/i.test(s.method) ? "MVDR(tracked)"
-          : /static/i.test(s.method) ? "MVDR(static)"
-          : "MVDR";
-    }
-    if (key === "dfn3" && ran && s.model) tag = s.model.replace("DeepFilterNet", "DFN");
-    parts.push(`${tag} ${ran ? "✓" : "—"}`);
-    if (!ran) skipped.push(`${label} (${s.reason || "skipped"})`);
-  }
-  return { short: parts.join(" · "), skipped };
-}
-
-
+/* ── instrument-only renderers below are retired (no longer called); kept
+ *    defined so any stray reference stays a no-throw. ── */
 function renderLeaderboard(m) {
   const stats = m.bootstrap_stats || {};
   const entries = Object.entries(stats).map(([name, s]) => ({
@@ -1508,12 +1477,15 @@ function renderBandChart(m) {
 }
 
 
-/* ═══════════════════ VERDICT ═══════════════════ */
+/* ═══════════════════ VERDICT (instrument-only — retired) ═══════════════════ */
 function setupVerdictRefresh() {
-  $("refreshVerdict").addEventListener("click", () => { loadVerdict(); refreshFiles(); });
+  const btn = $("refreshVerdict");
+  if (btn) btn.addEventListener("click", () => { loadVerdict(); refreshFiles(); });
 }
 
 async function loadVerdict() {
+  // The cross-recording verdict UI is retired in the production build.
+  if (!$("verdictSub")) return;
   let v;
   try {
     const r = await fetch("/api/verdict");
