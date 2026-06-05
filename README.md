@@ -1,11 +1,17 @@
 # OCTOVOX
 
-> 8-channel speech extraction studio for the **sensiBel SB-POLARIS** optical MEMS array.
-> Six beamformers compete on every recording; a 500-iteration bootstrap picks the consistent winner.
+> 8-channel speech front-end for the **sensiBel SB-POLARIS** optical MEMS array.
+> An 11-stage **production voice pipeline** turns 8 raw mic channels into one clean
+> mono voice — fast, in a fraction of real-time.
 
-This is the **package-first** rebuild of OCTOVOX. The DSP pipeline, web UI, API,
-and behaviour are unchanged from the original flat layout — only the project
-structure has been reorganized into a maintainable, runnable Flask package.
+The app's primary path is the **production clean-voice pipeline**
+(`/api/clean` → `prod_pipeline.run_production`): a conferencing / ceiling-array
+DSP chain (calibration → high-pass → VAD → DOA/tracking → MVDR beamforming → AEC
+→ noise reduction → automix → AGC/EQ/limiter) that emits one clean WAV. The
+6-algorithm bootstrap **instrument** that earlier versions surfaced in the UI
+still lives on in [`pipeline.py`](octovox_app/services/pipeline.py) and is reused
+wholesale by the production path — its beamformers, RTF estimators, post-filters
+and DeepFilterNet wrapper are the building blocks of the clean-voice chain.
 
 ---
 
@@ -23,7 +29,9 @@ New_OCTOVOX/
 │   │   ├── pages.py           # "/" and "/output/<path>" file serving
 │   │   └── api.py             # all "/api/..." endpoints
 │   ├── services/
-│   │   ├── pipeline.py        # DSP / beamforming pipeline (was octovox.py)
+│   │   ├── prod_pipeline.py   # PRODUCTION clean-voice pipeline (/api/clean) — main path
+│   │   ├── clean_cascade.py   # shared I/O + beamformers + neural wrappers
+│   │   ├── pipeline.py        # DSP / beamforming instrument library (was octovox.py)
 │   │   └── verdicts.py        # cross-recording aggregation (was verdict.py)
 │   ├── utils/
 │   │   ├── audio.py           # WAV metadata (wav_info)
@@ -70,17 +78,70 @@ no dependency on the old repo root.
 
 ## How it works
 
-1. **Step 01** — Record live, drop a `.wav`, or generate a synthetic sample.
-2. **Step 02** — Pick array geometry (UCA Polaris is the default), post-filter,
-   and toggle DeepFilterNet if installed. Click **Run pipeline**.
-3. **Step 03** — Read the **winner banner** (algorithm + consistency %), browse
-   the algorithm leaderboard, and play each output to compare.
+The UI has three racks:
 
-Six beamformers (Single-mic, RTF-MVDR, RTF-GEV+BAN, MWF, SDW-MWF, MaxSNR+Wiener)
-run in parallel on every recording. Each output is sliced into ~30 ms windows
-labelled loud/quiet against the input envelope; 500 bootstrap iterations build a
-per-algorithm SNR distribution, and the algorithm with the highest median SNR
-wins. The share of iterations it led is the **consistency** score.
+1. **01 · Source** — record live, drop a `.wav`, or generate a synthetic sample.
+2. **02 · Files** — pick a recording and the pipeline controls (below), then
+   **analyse** to clean the voice.
+3. **03 · Console** — A/B the raw 8-ch downmix against the clean output, and read
+   the **per-stage ran/skip + timing** table (every stage reports itself, so a
+   skipped stage is never silent).
+
+### Production pipeline stages
+
+Each `/api/clean` run drives `prod_pipeline.run_production`. WPE dereverb is
+multichannel, so it runs as a front-end (before the beam) when enabled.
+
+| # | Stage | Notes |
+|---|-------|-------|
+| 1 | Mic capsules | the 8 WAV channels |
+| 1b | **Mic health** | per-capsule OK / WARN / FAULT / DEAD / CLIP diagnostic (read-only) |
+| 2 | Channel calibration | equalize per-mic sensitivity to the array median |
+| 3 | High-pass + noise-floor estimate | zero-phase HPF (HVAC rumble) |
+| 5·track | **Tracking-path conditioning** | noise-robust, phase-preserving speech-band copy of the array for the trackers only (audio path untouched) |
+| 4 | VAD / speech detector | Silero |
+| 5 | DOA / talker tracking | block-wise SRP-PHAT (azimuth readout) |
+| 5b | **Movement selector** | SRP-PHAT spread *or* **RTF drift** (ambiguity-free; auto-switches batch↔tracked) |
+| 6 | Beamforming 8→1 | batch / tracked RTF-MVDR (+ downmix blend) |
+| 7 | AEC (far-end ref) | **partitioned** multi-tap or single-tap NLMS (active only with a reference WAV) |
+| 7b | **Feedback / howl risk** | sustained-tone diagnostic (read-only) |
+| 8 | Noise reduction | DeepFilterNet3 / decision-directed Wiener / none |
+| 9 | Automix / gating | VAD silence-floor on the single beam |
+| 10 | **AGC** + EQ + limiter | **perceptual** (attack/release + K-weighting) or instantaneous RMS |
+| 11 | Output | clean mono WAV (+ device playout via `/api/playout`) |
+
+**Bold** stages were added recently (see `CHANGES.md`).
+
+### Controls (rack 02)
+
+| Control | Options | What it does |
+|---------|---------|--------------|
+| Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine |
+| Beam | auto · batch · tracked | stage 6 beamformer |
+| Movement | SRP-PHAT · RTF drift | which signal decides batch-vs-tracked in `auto` |
+| AGC | perceptual · RMS | stage 10 loudness control |
+| AEC | partitioned · single-tap | stage 7 echo canceller (needs a reference WAV) |
+| Noise-robust tracking | on / off | the tracking-path conditioner (5·track) |
+| WPE dereverb | on / off | multichannel front-end (slow; off by default) |
+| EQ | on / off | gentle speech-presence EQ |
+
+> **Note on tracking & beam-weighting.** The "noise-robust tracking" split is the
+> transferable idea from ceiling-array products (Biamp Parlé et al.): the
+> *tracking* signal is speech-band and noise-robust so HVAC/projector noise can't
+> steer the beam, while the *audio* signal is untouched. It is **not** a latency
+> feature (parallel paths don't halve latency; this pipeline is offline batch).
+> Multi-beam "beam weighting / anti-collision" does not apply here — OCTOVOX
+> forms a single MVDR beam, so there are no two beams to deconflict.
+
+### The instrument (reused under the hood)
+
+The 6-algorithm bootstrap competition (Single-mic, RTF-MVDR, RTF-GEV+BAN, MWF,
+SDW-MWF, tracked RTF-MVDR) still lives in `pipeline.py`. Each output is sliced
+into ~30 ms loud/quiet windows; 500 bootstrap iterations build a per-algorithm
+SNR distribution and the highest-median-SNR algorithm wins, with its lead-share
+as a **consistency** score. The production path reuses these beamformers, RTF
+estimators and post-filters directly. See
+[`RTF_MVDR_TRACKED.md`](RTF_MVDR_TRACKED.md) for the batch-vs-tracked beamformer math.
 
 ---
 
@@ -88,17 +149,22 @@ wins. The share of iterations it led is the **consistency** score.
 
 ```
 data/output/<recording_stem>/
-  ├── 01_Single_mic.wav
-  ├── 02_RTF-MVDR.wav
-  ├── 03_RTF-GEV_BAN.wav
-  ├── 04_MWF.wav
-  ├── 05_SDW-MWF_mu2.wav
-  ├── 06_MaxSNRWiener.wav
-  ├── 07_octovox_max.wav        (only if DeepFilterNet ran)
-  ├── visualization.png
-  ├── report.html               (standalone, open in any browser)
-  └── metrics.json              (raw numbers, bootstrap stats, DoA, etc.)
+  ├── clean_prod.wav            # the clean mono voice (production path output)
+  ├── input_mono.wav            # raw 8-ch downmix, for A/B comparison
+  ├── report.html               # standalone report (open in any browser — see below)
+  ├── visualization.png         # 4-panel figure embedded in the report
+  └── …                         # extra instrument outputs only if the instrument is run
 ```
+
+### Report
+
+Every clean run writes a self-contained **`report.html`** (the **📄 Report**
+button in the console opens it; `/api/clean` also returns its URL). It embeds
+everything inline so the single file is portable: raw-vs-clean A/B players, a KPI
+strip (levels, noise-floor before→after, engines, process time), a 4-panel
+visualization (waveforms, raw & clean spectrograms, per-mic health bars), the
+diagnostics (mic-health table, DOA/movement, feedback risk, noise floor), and the
+full per-stage ran/skip + timing table.
 
 ---
 

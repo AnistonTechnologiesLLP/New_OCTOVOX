@@ -215,6 +215,49 @@ def estimate_noise_floor(y, fs, pct=10.0):
 
 
 # =========================================================================
+#  [5·track]  TRACKING-PATH CONDITIONER  (noise-robust, phase-preserving)
+# =========================================================================
+def condition_tracking_path(y, fs, lo_hz=250.0, hi_hz=3500.0, order=4):
+    """Condition a COPY of the array for talker tracking — a Biamp-style split
+    where the *tracking* path is noise-robust and band-limited to speech, while
+    the *audio* path (the beamformer input) is left untouched.
+
+    ``track_doa`` and :func:`rtf_drift` both estimate *where* the talker is from
+    inter-microphone differences. Out-of-band energy — sub-250 Hz HVAC rumble,
+    high-frequency hiss / projector-fan whine — carries no useful talker
+    direction but can pull those estimates toward the noise. Band-limiting the
+    tracking signal to the speech range (``lo_hz``..``hi_hz``) removes that energy
+    so the beam tracks the human, not the air-conditioner.
+
+    CRITICAL — phase preservation. DOA/RTF depend on the *relative phase* between
+    channels, so the tracking conditioner must be a SINGLE linear filter applied
+    IDENTICALLY to every channel (a per-channel adaptive denoiser would give each
+    mic a different phase and destroy the very cue the tracker reads). We use one
+    zero-phase Butterworth band-pass (``sosfiltfilt``, same coefficients on all 8
+    channels): it strips out-of-band noise while leaving every inter-channel
+    phase relationship intact. This is the audio-vs-tracking *path split*, the
+    transferable part of the Parlé design — NOT a latency trick (parallel paths
+    do not halve latency; this pipeline is offline batch anyway).
+
+    ``y`` is ``(D, samples)``; returns ``(y_track, info)``. Falls back to a copy
+    of the input on any filter error so tracking never blocks the pipeline.
+    """
+    try:
+        D, n = y.shape
+        hi = min(hi_hz, 0.45 * fs)
+        if hi <= lo_hz:
+            return y.copy(), {"ran": False, "reason": "band collapsed for this sr"}
+        sos = sps.butter(order, [lo_hz, hi], btype="bandpass", fs=fs, output="sos")
+        y_track = np.empty_like(y)
+        for c in range(D):
+            y_track[c] = sps.sosfiltfilt(sos, y[c]).astype(np.float32)
+        return y_track, {"ran": True, "band_hz": [lo_hz, round(hi, 1)], "order": order,
+                         "phase": "zero (common filter — inter-channel phase preserved)"}
+    except Exception as e:
+        return y.copy(), {"ran": False, "reason": f"error: {e}"}
+
+
+# =========================================================================
 #  [5]  DOA / TALKER TRACKING  (block-wise SRP-PHAT)
 # =========================================================================
 def track_doa(y, fs, mic_pos, n_blocks=3, move_thresh_deg=25.0):
@@ -737,7 +780,8 @@ def dd_wiener(x, fs, alpha=0.985, floor_db=-9.0, noise_pct=12.0, smooth_bins=3):
 def run_production(input_path, out_dir, *, reference_path=None,
                    nr="dfn", dfn_atten_lim_db=24.0, beam="auto",
                    mvdr_blend=0.6, wpe=False, eq=True,
-                   agc="perceptual", aec="partitioned", movement="srp", log=None):
+                   agc="perceptual", aec="partitioned", movement="srp",
+                   track="conditioned", log=None):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
     Parameters
@@ -768,6 +812,13 @@ def run_production(input_path, out_dir, *, reference_path=None,
         on batch). ``rtf`` = :func:`rtf_drift`, an ambiguity-free RTF-drift
         detector that auto WILL act on (switch to tracked) when it reports
         sustained movement. SRP-PHAT still runs for the azimuth readout either way.
+    track : "conditioned" | "audio"
+        Tracking-path source (stage [5·track], a Biamp-style audio/tracking
+        split). ``conditioned`` (DEFAULT) feeds the DOA + RTF-drift trackers a
+        noise-robust, speech-band, phase-preserving COPY of the array (via
+        :func:`condition_tracking_path`) so HVAC/projector noise can't hijack the
+        beam direction; the audio/beamformer path is untouched. ``audio`` tracks
+        on the raw audio path (legacy). NOT a latency feature.
     mvdr_blend : float in [0,1]
         MVDR↔downmix blend so off-axis speakers survive (see clean_cascade).
     wpe : bool
@@ -876,8 +927,19 @@ def run_production(input_path, out_dir, *, reference_path=None,
     stages["vad"] = _stage("vad", _vad_detect)
     _log(f"prod: VAD speech ratio {stages['vad'].get('speech_ratio', '?')}")
 
+    # ── [5·track] tracking-path conditioning (Biamp-style audio/tracking split) ─
+    #  Build a noise-robust, speech-band COPY of the array for the trackers only;
+    #  the audio path (`y` → beamformer) is untouched. Phase-preserving so DOA/RTF
+    #  cues survive. ``track="audio"`` reuses the raw audio path (legacy behavior).
+    if track == "conditioned":
+        y_track, tc_info = _stage("track_conditioning", lambda: condition_tracking_path(y, sr))
+    else:
+        y_track, tc_info = y, {"ran": False, "reason": "disabled (tracking uses the audio path)"}
+    stages["track_conditioning"] = tc_info
+    _log(f"prod: tracking path {'conditioned ' + str(tc_info.get('band_hz')) if tc_info.get('ran') else 'raw (audio path)'}")
+
     # ── [5] DOA / talker tracking (always run — supplies the azimuth readout) ─
-    doa_info, doa_moved = _stage("doa", lambda: track_doa(y, sr, ov.POLARIS_UCA_M))
+    doa_info, doa_moved = _stage("doa", lambda: track_doa(y_track, sr, ov.POLARIS_UCA_M))
     stages["doa"] = doa_info
     _log(f"prod: DOA spread {doa_info.get('az_spread_deg', '?')}° → "
          f"{'moving' if doa_moved else 'static'} talker")
@@ -888,7 +950,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
     #  detector, whose median-of-steady-transitions reliably separates a
     #  continuously moving talker from a static one on this array.
     if movement == "rtf":
-        rtf_info, moved = _stage("rtf_drift", lambda: rtf_drift(y, sr))
+        rtf_info, moved = _stage("rtf_drift", lambda: rtf_drift(y_track, sr))
         stages["rtf_drift"] = rtf_info
         _log(f"prod: RTF drift steady-median {rtf_info.get('steady_median', '?')} → "
              f"{'moving' if moved else 'static'} talker")
@@ -1032,10 +1094,25 @@ def run_production(input_path, out_dir, *, reference_path=None,
 
     elapsed = round(time.time() - t0, 2)
     timings["TOTAL"] = round(elapsed * 1000.0, 1)
+
+    # ── standalone HTML report (never fails the clean run) ────────────
+    from . import prod_report
+    params_str = (f"NR:{nr} · beam:{beam} · move:{movement} · AGC:{agc} · "
+                  f"AEC:{aec}" + (" · track" if track == "conditioned" else "")
+                  + (" · WPE" if wpe else "") + (" · EQ" if eq else ""))
+    rep = _stage("report", lambda: prod_report.build_report(
+        out_dir, stem, input_path.name,
+        raw_mono=raw_downmix, clean_mono=mono, sr=sr,
+        stages=stages, timings=timings, elapsed_s=elapsed,
+        clean_path=clean_path, input_path=input_path_mono, params=params_str))
+    stages["report"] = rep
+    _log(f"prod: report {'written' if rep.get('ran') else 'skipped (' + str(rep.get('reason')) + ')'}")
+
     return {
         "clean_path": str(clean_path),
         "clean_name": clean_path.name,
         "input_name": input_path_mono.name,
+        "report_name": rep.get("report_name") if rep.get("ran") else None,
         "stem": stem,
         "sr": int(sr),
         "n_channels": int(D),

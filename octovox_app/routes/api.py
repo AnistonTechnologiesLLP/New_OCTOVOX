@@ -551,6 +551,9 @@ def clean_voice():
       · ``movement`` : "srp" (default — SRP-PHAT azimuth, readout only) | "rtf"
                    (RTF-drift; in beam="auto" it switches to the tracked beam on
                    sustained movement).
+      · ``track`` : "conditioned" (default — noise-robust speech-band tracking
+                   path so HVAC/projector noise can't steer the beam) | "audio"
+                   (track on the raw audio path).
       · ``mvdr_blend`` (0..1, keeps off-axis speakers), ``dfn_atten_lim_db``,
         and ``reference`` (filename of an optional far-end ref WAV for AEC).
     """
@@ -579,6 +582,9 @@ def clean_voice():
     movement = str(data.get("movement", "srp")).lower()
     if movement not in ("srp", "rtf"):
         movement = "srp"
+    track = str(data.get("track", "conditioned")).lower()
+    if track not in ("conditioned", "audio"):
+        track = "conditioned"
     try:
         mvdr_blend = max(0.0, min(1.0, float(data.get("mvdr_blend", 0.6))))
     except (TypeError, ValueError):
@@ -602,12 +608,16 @@ def clean_voice():
         result = prod.run_production(
             wav_path, OUTPUT_DIR, reference_path=ref_path,
             nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
-            mvdr_blend=mvdr_blend, wpe=wpe, eq=eq, agc=agc, aec=aec, movement=movement)
+            mvdr_blend=mvdr_blend, wpe=wpe, eq=eq, agc=agc, aec=aec,
+            movement=movement, track=track)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
+        report_url = (f"/output/{result['stem']}/{result['report_name']}"
+                      if result.get("report_name") else None)
         return jsonify(ok=True,
                        clean=clean_url,
                        input=input_url,
+                       report=report_url,
                        stem=result["stem"],
                        stages=result["stages"],
                        timings=result["timings"],

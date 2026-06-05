@@ -350,3 +350,32 @@ median + win-rate**.
   planar array can't resolve.
 - Compare variants with bootstrap median + win-rate, not the noisy point
   `snr_db`. Interpolation and `W=0.15` were tried and rejected.
+
+---
+
+## 11. Choosing batch vs. tracked automatically (production path)
+
+The instrument above tells you *which beam wins per clip*; the production
+pipeline ([`prod_pipeline.py`](octovox_app/services/prod_pipeline.py)) has to
+**decide live, per recording, without a bootstrap**. Two detectors feed the
+`beam="auto"` choice:
+
+- **SRP-PHAT spread** (`track_doa`, `movement="srp"`, default) — block-wise
+  azimuth; reported as a readout but **not acted on**, because this UCA has a
+  front/back ±180° ambiguity that swings the azimuth even for a static talker.
+- **RTF drift** (`rtf_drift`, `movement="rtf"`) — measures how much the *RTF
+  itself* (the quantity §2.3 / §4 steer with) changes block-to-block. It drops
+  the onset-settling transition and fires on the **median of the steady
+  transitions**, which requires *sustained* change. Being angle-free, it has
+  none of the front/back ambiguity, so `auto` **does** act on it: sustained
+  drift → tracked beam, else batch. Measured margin on this project's clips:
+  every real/static recording sits at steady-median ≤ 0.01, while
+  `synth_azimuth_sweep.wav` (§9's motion asset) sits at ~0.30 — so the default
+  threshold is 0.12.
+
+This matches §10's verdict (tracked wins on genuine motion, batch on static
+talkers): RTF drift flags the sweep as moving and leaves every static clip on
+batch. The trackers can additionally run on a **noise-robust, phase-preserving
+speech-band copy** of the array (`condition_tracking_path`, the
+"Noise-robust tracking" toggle) so HVAC/projector noise can't pull either
+detector. Tests: `tests/test_prod_ports.py`.

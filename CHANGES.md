@@ -1,4 +1,49 @@
-# Changes — last 24 hours
+# Changelog
+
+## 2026-06-05 — Production pipeline: ported DSP stages, RTF movement, noise-robust tracking
+
+New capabilities, all in the production clean-voice path
+([`prod_pipeline.py`](octovox_app/services/prod_pipeline.py)) with matching
+`/api/clean` params, UI controls, and tests
+([`tests/test_prod_ports.py`](tests/test_prod_ports.py)). Nothing was removed;
+every upgrade is the new default with the prior behaviour one keyword/toggle away.
+Five pieces were ported and recalibrated from a sibling research repo; two
+(RTF-drift movement, tracking-path split) are new.
+
+| Stage | Function | What it adds | Toggle (default) |
+|-------|----------|--------------|------------------|
+| 1b · Mic health | `mic_health_report` | per-capsule OK/WARN/FAULT/DEAD/CLIP diagnostic on the raw input | always on (read-only) |
+| 5·track · Tracking path | `condition_tracking_path` | noise-robust, phase-preserving speech-band copy of the array for the trackers, so HVAC/projector noise can't steer the beam (~3× lower DOA error under directional rumble). Audio path untouched. | `track` (`conditioned`) |
+| 5b · Movement | `rtf_drift` | ambiguity-free RTF-drift talker-movement detector; in `beam=auto` it **acts on** the signal (switch to tracked) where SRP-PHAT couldn't (front/back ambiguity) | `movement` (`srp`) |
+| 7 · AEC | `aec_partitioned` | multi-tap partitioned STFT AEC for long echo tails (vs one-tap NLMS) | `aec` (`partitioned`) |
+| 7b · Feedback risk | `feedback_risk` | sustained-tone (PA howl) diagnostic, calibrated to read `low` on clean speech | always on (read-only) |
+| 10 · AGC | `perceptual_agc` | K-weighted attack/release loudness riding (vs instantaneous RMS), **with a fix for the startup gain blast** (seeds at steady-state active level — no over-loud first word) | `agc` (`perceptual`) |
+
+- **Standalone report** (new `prod_report.py`): every clean run now writes a
+  self-contained `report.html` + `visualization.png` to `data/output/<stem>/`,
+  the way the old instrument did but adapted to the single-output production path
+  — raw-vs-clean A/B players, KPI strip (levels, noise-floor before→after,
+  engines), a 4-panel figure (waveforms, raw & clean spectrograms, mic-health
+  bars), diagnostics, and the per-stage timing table, all embedded inline.
+  Surfaced via a **📄 Report** button and the `report` URL in the `/api/clean`
+  response. Generation is wrapped so a report failure never fails the clean.
+- **UI** ([index.html](octovox_app/templates/index.html), [app.js](octovox_app/static/app.js)):
+  added **Movement**, **AGC**, **AEC** dropdowns, a **Noise-robust tracking**
+  checkbox, and the **📄 Report** button; new diagnostic stages render in the
+  per-stage table.
+- **API** ([api.py](octovox_app/routes/api.py)): `/api/clean` now accepts
+  `agc`, `aec`, `movement`, `track` (all validated, back-compatible defaults).
+- **Tests**: `tests/test_prod_ports.py` (19 cases) covers each new function —
+  mic-fault detection, AGC no-startup-blast, feedback static-vs-howl separation,
+  partitioned-AEC echo reduction, RTF static-vs-moving margin, and tracking-path
+  phase-preservation + directional-rumble rejection. Full suite: **30 passing**.
+- **Honest scope notes** (kept out on purpose): no "half latency" claim (parallel
+  paths don't halve latency; this pipeline is offline batch), and no multi-beam
+  beam-weighting (OCTOVOX forms a single MVDR beam — nothing to deconflict).
+
+---
+
+## 2026-06-02 → 06-03 — Initial scaffold + Sprint B (GPU, tracked RTF)
 
 _Window: 2026-06-02 ~11:00 → 2026-06-03 ~11:00. The repository has no git commits yet
 (everything is staged in the initial working tree), so this log is reconstructed from

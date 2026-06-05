@@ -1052,6 +1052,7 @@ function getProdOpts() {
     agc:  ($("prodAgc")  || {}).value || "perceptual",
     aec:  ($("prodAec")  || {}).value || "partitioned",
     movement: ($("prodMovement") || {}).value || "srp",
+    track: ($("prodTrack") ? ($("prodTrack").checked ? "conditioned" : "audio") : "conditioned"),
     wpe:  !!($("prodWpe") && $("prodWpe").checked),
     eq:    ($("prodEq") ? $("prodEq").checked : true),
   };
@@ -1115,6 +1116,7 @@ function renderProduction(j) {
   $("wsRtf").textContent = rtf ? `${rtf.toFixed(2)}×` : "—";
 
   $("downloadWinnerBtn").onclick = () => { window.location.href = j.clean; };
+  setReportButton(j.report || (j.stem ? `/output/${j.stem}/report.html` : null));
   const rerun = $("rerunProdBtn");
   if (rerun) rerun.onclick = () => runProduction(`${stem}.wav`);
   const pb = $("playoutBtn");
@@ -1131,6 +1133,20 @@ function opthLabel(o) {
   return `NR:${o.nr}${o.wpe ? " +WPE" : ""} · beam:${o.beam}${o.eq ? " · EQ" : ""}`;
 }
 
+/** Point the "Report" button at the standalone HTML report (opens in a new tab),
+ *  or disable it if no report URL is available. */
+function setReportButton(url) {
+  const btn = $("viewReportBtn");
+  if (!btn) return;
+  if (url) {
+    btn.removeAttribute("data-disabled");
+    btn.onclick = () => window.open(url, "_blank", "noopener");
+  } else {
+    btn.setAttribute("data-disabled", "");
+    btn.onclick = () => toast("No report for this run.", "warn");
+  }
+}
+
 /** Re-view a previously-cleaned file without re-running (loads output WAVs). */
 async function showResults(stem) {
   $("results").classList.remove("hidden");
@@ -1140,6 +1156,7 @@ async function showResults(stem) {
   state.currentClean = clean;
   $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · <span class="muted">re-run to refresh stage timings</span>`;
   $("downloadWinnerBtn").onclick = () => { window.location.href = clean; };
+  setReportButton(`/output/${stem}/report.html`);
   if ($("rerunProdBtn")) $("rerunProdBtn").onclick = () => runProduction(`${stem}.wav`);
   if ($("playoutBtn"))   $("playoutBtn").onclick = () => playToDevice(stem);
   loadABPlayers(`/output/${stem}/input_mono.wav`, clean, "raw 8-ch downmix", "clean_prod.wav");
@@ -1210,6 +1227,7 @@ const PROD_STAGE_LABELS = {
   noise_floor:    ["③ Noise-floor estimate",     s => s.ran ? `${s.noise_floor_dbfs} dBFS` : s.reason],
   dereverb_wpe:   ["⑧ Dereverb (WPE front-end)", s => s.ran ? `taps ${s.taps} · iters ${s.iterations}` : s.reason],
   vad:            ["④ VAD / speech detector",    s => s.ran ? `speech ${(s.speech_ratio*100).toFixed(0)}%` : s.reason],
+  track_conditioning: ["⑤ Tracking path",        s => s.ran ? `noise-robust ${(s.band_hz||[]).join("–")} Hz` : s.reason],
   doa:            ["⑤ DOA / talker tracking",    s => s.ran ? `az ${(s.az_per_block||[]).join("/")}° · spread ${s.az_spread_deg}°` : s.reason],
   rtf_drift:      ["⑤ RTF-drift movement",        s => s.ran ? `steady ${s.steady_median} · ${s.moved?"moving → tracked":"static → batch"}` : s.reason],
   beamform:       ["⑥ Beamforming (MVDR 8→1)",   s => s.ran ? `${(s.method||"").replace("_beamform","")} · ${s.blend||""}` : s.reason],
