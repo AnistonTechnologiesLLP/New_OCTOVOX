@@ -942,14 +942,94 @@ def dd_wiener(x, fs, alpha=0.985, floor_db=-9.0, noise_pct=12.0, smooth_bins=3):
         return np.asarray(x, dtype=np.float32)
 
 
+def residual_suppress(x, fs, strength=0.6, noise_pct=10.0,
+                      smooth_bins=3, smooth_frames=3):
+    """Residual stationary-noise suppressor — a gentle SECOND pass that runs
+    *after* the main NR (DeepFilterNet3) to mop up the low stationary noise bed
+    a naturalness-capped denoiser deliberately leaves behind.
+
+    DFN3 is excellent on non-stationary noise but, with its attenuation capped
+    for natural voice, it leaves a quiet steady hiss/hum. That residual is, by
+    then, very stationary — so a per-bin noise PSD taken from the quietest frames
+    (min-statistics style) models it well, and an over-subtraction Wiener gain
+    removes it. ``strength`` in [0,1] dials aggressiveness::
+
+        alpha (over-subtraction) = 1.0 + 1.6*strength    #  1.0 .. 2.6
+        gmin  (spectral floor)   = -16 - 16*strength dB  # -16 .. -32 dB
+
+    The gain is smoothed across frequency AND time so the suppression can't
+    flicker bin-to-bin (that flicker is exactly the warbling 'musical noise').
+    Edge-spike-safe (boundary='zeros'/True, see :func:`dd_wiener`) and clamped to
+    the input envelope. Never raises — returns the input unchanged on error.
+    """
+    try:
+        x = np.asarray(x, dtype=np.float32).reshape(-1)
+        s = float(np.clip(strength, 0.0, 1.0))
+        if s <= 0.0:
+            return x, {"ran": False, "reason": "strength=0"}
+        alpha = 1.0 + 1.6 * s
+        floor_db = -16.0 - 16.0 * s
+        gmin = 10.0 ** (floor_db / 20.0)               # amplitude gain floor
+        f, t, Z = sps.stft(x, fs=fs, nperseg=NFFT, noverlap=NFFT - HOP,
+                           window=WIN, boundary="zeros", padded=True)
+        mag = np.abs(Z); ph = np.angle(Z)
+        P = mag ** 2
+        # Stationary noise PSD per bin = MEAN of the quietest frames (the residual
+        # bed after DFN is stationary, so an average over the low-energy frames is
+        # representative — a per-bin low percentile underestimates it and leaves
+        # the over-subtraction short of the floor on noise-only frames).
+        frame_e = P.mean(axis=0)
+        thr = np.percentile(frame_e, noise_pct)
+        quiet = frame_e <= max(thr, EPS)
+        if quiet.sum() < 3:
+            noise = np.percentile(P, noise_pct, axis=1, keepdims=True)
+        else:
+            noise = P[:, quiet].mean(axis=1, keepdims=True)
+        noise = np.maximum(noise, EPS)
+        # over-subtracted clean-power estimate → smooth Wiener gain in [gmin,1).
+        clean_p = np.maximum(P - alpha * noise, 0.0)
+        G = np.maximum(clean_p / (clean_p + noise), gmin)
+        if smooth_bins and smooth_bins > 1:            # smooth across frequency
+            kf = np.ones(smooth_bins, dtype=np.float32) / smooth_bins
+            G = np.apply_along_axis(lambda c: np.convolve(c, kf, mode="same"), 0, G)
+        if smooth_frames and smooth_frames > 1:        # smooth across time
+            kt = np.ones(smooth_frames, dtype=np.float32) / smooth_frames
+            G = np.apply_along_axis(lambda c: np.convolve(c, kt, mode="same"), 1, G)
+        Zc = G * mag * np.exp(1j * ph)
+        _, y = sps.istft(Zc, fs=fs, nperseg=NFFT, noverlap=NFFT - HOP,
+                         window=WIN, boundary=True)
+        if len(y) < len(x):
+            y = np.pad(y, (0, len(x) - len(y)))
+        peak = float(np.max(np.abs(x)) + EPS)
+        y = np.clip(y[:len(x)], -peak, peak).astype(np.float32)
+        # Report the NOISE-BED change, not the global RMS: the bed lives in the
+        # pauses, so global RMS (speech-dominated) barely moves and would read as
+        # "no effect". Bed = RMS of the quietest 20% of 30 ms windows.
+        def _bed(sig):
+            w = max(1, int(0.03 * fs))
+            e = [float(np.sqrt(np.mean(sig[i:i + w] ** 2)))
+                 for i in range(0, max(1, len(sig) - w), w)]
+            return float(np.percentile(e, 20)) + EPS if e else EPS
+        bed_in, bed_out = _bed(x), _bed(y)
+        return y, {"ran": True, "strength": round(s, 2), "alpha": round(alpha, 2),
+                   "floor_db": round(floor_db, 1),
+                   "bed_change_db": round(20.0 * np.log10(bed_out / bed_in), 1),
+                   "rms_change_db": round(20.0 * np.log10(
+                       (np.sqrt(np.mean(y ** 2)) + EPS) / (np.sqrt(np.mean(x ** 2)) + EPS)), 1)}
+    except Exception as e:
+        print(f"[WARN] residual_suppress failed: {e}")
+        return np.asarray(x, dtype=np.float32), {"ran": False, "reason": f"error: {e}"}
+
+
 # =========================================================================
 #  MAIN ORCHESTRATOR
 # =========================================================================
 def run_production(input_path, out_dir, *, reference_path=None,
-                   nr="dfn", dfn_atten_lim_db=24.0, beam="auto",
+                   nr="dfn", dfn_atten_lim_db=32.0, beam="auto",
                    mvdr_blend=0.6, wpe=False, eq=True,
                    agc="perceptual", aec="partitioned", movement="srp",
-                   track="conditioned", dereverb=None, mask="snr", log=None):
+                   track="conditioned", dereverb=None, mask="snr",
+                   residual=0.6, pause_floor_db=-40.0, log=None):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
     Parameters
@@ -968,7 +1048,10 @@ def run_production(input_path, out_dir, *, reference_path=None,
         decision-directed :func:`dd_wiener` (quick, no neural cost, and far less
         'robotic' than plain spectral subtraction). ``none`` = beam only.
     dfn_atten_lim_db : float | None
-        Max suppression for DFN3 (keeps a quieter 2nd speaker); see clean_cascade.
+        Max suppression DFN3 is allowed to apply (stage [8b]). The DEFAULT is
+        ``32.0`` — raised from the old 24 dB so DFN suppresses the residual noise
+        bed harder while staying natural. ``None`` uncaps it (most aggressive);
+        lower values keep a quieter 2nd speaker. See clean_cascade.
     beam : "auto" | "batch" | "tracked"
         Beamformer (stage [6]). ``auto`` uses the ``movement`` selector to pick
         tracked when the talker moved, else the cheaper/better batch RTF-MVDR.
@@ -1020,6 +1103,17 @@ def run_production(input_path, out_dir, *, reference_path=None,
         Echo canceller (stage [7], only active with a far-end ``reference_path``).
         ``partitioned`` (DEFAULT) = :func:`aec_partitioned` (multi-tap, long echo
         tail). ``single`` = the compact one-tap :func:`aec_nlms`.
+    residual : float in [0,1] | None
+        Strength of the residual stationary-noise suppressor (stage [8c],
+        :func:`residual_suppress`) — a gentle SECOND NR pass that mops up the
+        quiet steady hiss/hum DFN3 leaves behind. The DEFAULT ``0.6`` is the
+        "strong but natural" setting; ``0`` / ``None`` turns the stage off, ``1``
+        is the most aggressive (near-silent bed, small risk of warble). This is
+        the main "denoise strength" knob exposed in the UI.
+    pause_floor_db : float
+        Silence floor for the automix gate (stage [9]). The DEFAULT ``-40.0``
+        (deepened from -24) pushes the noise in speech *pauses* well down so
+        gaps go near-silent; raise toward -24 for a softer, less gated feel.
     log : callable | None  -- optional progress sink.
 
     Returns
@@ -1268,10 +1362,24 @@ def run_production(input_path, out_dir, *, reference_path=None,
     stages["noise_reduction"] = info
     _log(f"prod: NR {info.get('engine', 'skipped')} ({'ran' if info.get('ran') else info.get('reason')})")
 
+    # ── [8c] residual stationary-noise suppressor ─────────────────────
+    #  Second, gentle NR pass to mop up the steady hiss/hum the (naturalness-
+    #  capped) DFN3 leaves behind. Off when residual is 0/None.
+    if residual and float(residual) > 0:
+        mono, info = _stage("residual",
+                            lambda: residual_suppress(mono, sr, strength=float(residual)))
+        stages["residual_suppress"] = info
+    else:
+        stages["residual_suppress"] = {"ran": False,
+                                       "reason": f"disabled (residual={residual})"}
+    _log(f"prod: residual suppressor "
+         f"{stages['residual_suppress'].get('rms_change_db', 'skipped')}"
+         f"{' dB' if stages['residual_suppress'].get('ran') else ''}")
+
     # ── [9] automix / gating / beam weighting ─────────────────────────
     #  Normalize first so the gating VAD (Silero) always sees an in-range signal.
     mono, _ = _peak_normalize(mono)
-    mono, info = _stage("automix", lambda: automix(mono, sr))
+    mono, info = _stage("automix", lambda: automix(mono, sr, floor_db=pause_floor_db))
     stages["automix"] = info
     _log(f"prod: automix {'applied' if info.get('ran') else 'skipped'}")
 

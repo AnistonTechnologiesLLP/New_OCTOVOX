@@ -606,9 +606,19 @@ def clean_voice():
         dfn_atten_lim_db = None
     else:
         try:
-            dfn_atten_lim_db = float(data.get("dfn_atten_lim_db", 24.0))
+            dfn_atten_lim_db = float(data.get("dfn_atten_lim_db", 32.0))
         except (TypeError, ValueError):
-            dfn_atten_lim_db = 24.0
+            dfn_atten_lim_db = 32.0
+    # Residual stationary-noise suppressor strength (stage [8c]); 0..1, 0=off.
+    try:
+        residual = max(0.0, min(1.0, float(data.get("residual", 0.6))))
+    except (TypeError, ValueError):
+        residual = 0.6
+    # Automix silence (pause) floor in dBFS (stage [9]); deeper = quieter gaps.
+    try:
+        pause_floor_db = float(data.get("pause_floor_db", -40.0))
+    except (TypeError, ValueError):
+        pause_floor_db = -40.0
     # Optional far-end reference for stage [7] AEC (else AEC is a clean skip).
     ref_path = None
     ref_name = data.get("reference")
@@ -622,7 +632,8 @@ def clean_voice():
             wav_path, OUTPUT_DIR, reference_path=ref_path,
             nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
             mvdr_blend=mvdr_blend, wpe=wpe, dereverb=dereverb, eq=eq,
-            agc=agc, aec=aec, movement=movement, track=track, mask=mask)
+            agc=agc, aec=aec, movement=movement, track=track, mask=mask,
+            residual=residual, pause_floor_db=pause_floor_db)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
         report_url = (f"/output/{result['stem']}/{result['report_name']}"

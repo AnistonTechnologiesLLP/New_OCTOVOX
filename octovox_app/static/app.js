@@ -118,6 +118,7 @@ window.addEventListener("DOMContentLoaded", () => {
   setupRecordPanel();
   setupFilesPanel();
   setupVerdictRefresh();
+  setupProdControls();
   loadDevices();
   loadOutputDevices();
   refreshFiles();
@@ -1044,6 +1045,20 @@ async function clearAllOutput() {
 
 /* ═══════════════════ RESULTS (production) ═══════════════════ */
 
+/** Wire live readouts for the pipeline control knobs (e.g. Denoise strength). */
+function setupProdControls() {
+  const r = $("prodResidual"), rv = $("prodResidualVal");
+  if (r && rv) {
+    const show = () => {
+      const v = parseFloat(r.value);
+      const tag = v <= 0 ? " (off)" : v < 0.45 ? " (gentle)" : v < 0.8 ? " (natural)" : " (aggressive)";
+      rv.textContent = v.toFixed(2) + tag;
+    };
+    r.addEventListener("input", show);
+    show();
+  }
+}
+
 /** Read the current pipeline control knobs from the results panel. */
 function getProdOpts() {
   return {
@@ -1055,6 +1070,7 @@ function getProdOpts() {
     mask: ($("prodMask") || {}).value || "snr",
     track: ($("prodTrack") ? ($("prodTrack").checked ? "conditioned" : "audio") : "conditioned"),
     dereverb: ($("prodDereverb") || {}).value || "none",
+    residual: ($("prodResidual") ? parseFloat($("prodResidual").value) : 0.6),
     eq:    ($("prodEq") ? $("prodEq").checked : true),
   };
 }
@@ -1237,6 +1253,7 @@ const PROD_STAGE_LABELS = {
   aec:            ["⑦ AEC (far-end ref)",        s => s.ran ? `ERLE ${s.erle_db} dB${s.n_taps?` · ${s.n_taps} taps`:""}` : s.reason],
   feedback_risk:  ["⑦ Feedback / howl risk",     s => s.ran ? `${s.risk}${s.suspect_hz?` · ${s.suspect_hz} Hz`:""} (score ${s.risk_score})` : s.reason],
   noise_reduction:["⑧ Noise reduction",          s => s.ran ? `${s.engine}` : s.reason],
+  residual_suppress:["⑧ Residual suppressor",     s => s.ran ? `strength ${s.strength} · bed ${s.bed_change_db} dB` : s.reason],
   automix:        ["⑨ Automix / gating",         s => s.ran ? `${s.speech_frames}/${s.total_frames} speech frames` : s.reason],
   agc_eq_limiter: ["⑩ AGC + EQ + limiter",       s => s.ran ? `AGC ${(s.agc&&s.agc.engine)||"rms"}→${s.agc_target_dbfs} dBFS${s.eq&&s.eq.ran?" · EQ":""} · limit ${s.limiter_ceiling}` : s.reason],
   output:         ["⑪ Output (WAV)",             s => s.ran ? `norm ${s.gain_db>=0?"+":""}${s.gain_db} dB` : s.reason],

@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-06-05 (later) — Residual noise mop-up: kill the bed DFN3 leaves behind
+
+Users reported a quiet steady hiss/hum remaining *after* DeepFilterNet3. That is
+DFN's naturalness cap (24 dB) deliberately leaving a low stationary floor. Added a
+"strong but natural" denoise stack, all defaulted on, all dial-able:
+
+- **Residual suppressor** (new `residual_suppress`, stage [8c] in
+  [`prod_pipeline.py`](octovox_app/services/prod_pipeline.py)): a gentle SECOND NR
+  pass that runs *after* DFN3. It models the now-stationary residual bed from the
+  quietest frames (mean per-bin noise PSD, like `dd_wiener`) and removes it with an
+  over-subtraction Wiener gain, smoothed across frequency **and** time to avoid
+  musical noise. One knob, `residual` ∈ [0,1] (default **0.6**): `alpha = 1+1.6·s`,
+  floor `= −16−16·s` dB. Edge-spike-safe (`boundary='zeros'/True`) and clamped to
+  the input envelope. **Measured: −9 dB of extra noise-bed reduction on a real
+  conference clip (−13 dB on synthetic) with voice RMS unchanged (−0.1 dB)**; runs
+  in ~160 ms. The stage reports `bed_change_db` (quiet-frame RMS), not global RMS,
+  so the effect is visible (global RMS is speech-dominated and barely moves).
+- **DFN3 cap raised 24 → 32 dB** (`dfn_atten_lim_db` default): DFN now suppresses
+  the bed harder while staying natural. `None` uncaps it; lower keeps a quieter 2nd
+  speaker.
+- **Automix pause floor deepened −24 → −40 dB** (`pause_floor_db`): speech *gaps*
+  go near-silent so noise only sits under speech, where the beam + NR handle it.
+- **UI**: a **Denoise strength** slider (`prodResidual`) in the console controls
+  with a live gentle/natural/aggressive readout; new ⑧ Residual stage in the timing
+  table. **API**: `/api/clean` accepts `residual` and `pause_floor_db`.
+- **Tests**: `tests/test_prod_ports.py` +3 (bed-cut-but-keep-voice, strength
+  monotonicity, off/bounded edge-safety). Full suite **42 passing**.
+
+---
+
 ## 2026-06-05 — Production pipeline: ported DSP stages, RTF movement, noise-robust tracking
 
 New capabilities, all in the production clean-voice path

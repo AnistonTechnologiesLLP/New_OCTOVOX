@@ -107,8 +107,9 @@ real-time spot).
 | 6 | Beamforming 8→1 | batch / tracked RTF-MVDR (+ downmix blend) |
 | 7 | AEC (far-end ref) | **partitioned** multi-tap or single-tap NLMS (active only with a reference WAV) |
 | 7b | **Feedback / howl risk** | sustained-tone diagnostic (read-only) |
-| 8 | Noise reduction | DeepFilterNet3 / decision-directed Wiener / none |
-| 9 | Automix / gating | VAD silence-floor on the single beam |
+| 8 | Noise reduction | DeepFilterNet3 (default 32 dB cap) / decision-directed Wiener / none |
+| 8c | **Residual suppressor** | gentle 2nd pass that mops up the stationary hiss/hum DFN3 leaves behind (over-subtraction Wiener keyed on the pause-frame noise PSD) |
+| 9 | Automix / gating | VAD silence-floor on the single beam (default −40 dB) |
 | 10 | **AGC** + EQ + limiter | **perceptual** (attack/release + K-weighting) or instantaneous RMS |
 | 11 | Output | clean mono WAV (+ device playout via `/api/playout`) |
 
@@ -118,7 +119,8 @@ real-time spot).
 
 | Control | Options | What it does |
 |---------|---------|--------------|
-| Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine |
+| Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine (DFN3 capped at 32 dB) |
+| Denoise strength | 0 … 1 slider (default 0.6) | stage 8c residual mop-up — 0 = off, ~0.3 gentle, 0.6 natural, 1.0 near-silent bed |
 | Beam | auto · batch · tracked | stage 6 beamformer |
 | Movement | SRP-PHAT · RTF drift | which signal decides batch-vs-tracked in `auto` |
 | Mask | SNR · coherence-auto · coherence | speech/noise mask for the MVDR covariance; coherence adds the spatial (ASA) cue. `auto` builds both beams and keeps the better — never worse than baseline |

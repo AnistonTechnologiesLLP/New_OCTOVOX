@@ -16,7 +16,7 @@ from octovox_app.services import prod_pipeline as prod
 from octovox_app.services.prod_pipeline import (
     mic_health_report, perceptual_agc, feedback_risk, aec_partitioned, rtf_drift,
     condition_tracking_path, track_doa, dereverb_spectral, dd_wiener,
-    spatial_coherence, beamform_masked,
+    spatial_coherence, beamform_masked, residual_suppress,
 )
 from octovox_app.services import pipeline as _ov
 from octovox_app.services.pipeline import POLARIS_UCA_M, SPEED_SOUND
@@ -351,6 +351,55 @@ def test_dd_wiener_no_edge_spike():
     out = dd_wiener(x, FS)
     assert np.max(np.abs(out)) <= np.max(np.abs(x)) + 1e-4
     assert np.all(np.isfinite(out))
+
+
+# ---------------------------------------------------------------------------
+#  residual_suppress  (second-pass stationary-noise mop-up after DFN)
+# ---------------------------------------------------------------------------
+def _voice_plus_bed(n=3 * FS, seed=7, bed=0.03):
+    """Gated tone (the 'voice') over a steady broadband noise bed."""
+    t = np.arange(n) / FS
+    gate = (np.sin(2 * np.pi * 2.0 * t) > 0).astype(np.float32)   # on/off halves
+    voice = 0.4 * np.sin(2 * np.pi * 220 * t).astype(np.float32) * gate
+    noise = (np.random.default_rng(seed).standard_normal(n).astype(np.float32) * bed)
+    return (voice + noise).astype(np.float32), gate
+
+
+def test_residual_suppress_cuts_bed_keeps_voice():
+    """The default strength must take a real bite out of the stationary noise bed
+    (measured in the silent halves) while leaving the voice essentially intact."""
+    x, gate = _voice_plus_bed()
+    y, info = residual_suppress(x, FS, strength=0.6)
+    assert info["ran"]
+    sil, spk = gate <= 0, gate > 0
+    bed_in = np.sqrt(np.mean(x[sil] ** 2)); bed_out = np.sqrt(np.mean(y[sil] ** 2))
+    v_in = np.sqrt(np.mean(x[spk] ** 2));   v_out = np.sqrt(np.mean(y[spk] ** 2))
+    assert 20 * np.log10(bed_out / bed_in) < -6.0          # bed down ≥ 6 dB
+    assert 20 * np.log10(v_out / v_in) > -1.0              # voice within 1 dB
+
+
+def test_residual_suppress_strength_monotonic():
+    """Higher strength removes more of the bed (gentle < natural < aggressive)."""
+    x, gate = _voice_plus_bed()
+    sil = gate <= 0
+    beds = []
+    for s in (0.3, 0.6, 1.0):
+        y, _ = residual_suppress(x, FS, strength=s)
+        beds.append(np.sqrt(np.mean(y[sil] ** 2)))
+    assert beds[0] > beds[1] > beds[2]                     # strictly more suppression
+
+
+def test_residual_suppress_off_and_bounded():
+    """strength=0 is a clean pass-through; any strength stays finite and within
+    the input envelope (no ISTFT edge blow-up)."""
+    x, _ = _voice_plus_bed(seed=11)
+    y0, info0 = residual_suppress(x, FS, strength=0.0)
+    assert info0["ran"] is False
+    np.testing.assert_array_equal(y0, x)
+    y1, _ = residual_suppress(x, FS, strength=1.0)
+    assert len(y1) == len(x)
+    assert np.max(np.abs(y1)) <= np.max(np.abs(x)) + 1e-4
+    assert np.all(np.isfinite(y1))
 
 
 # ---------------------------------------------------------------------------
