@@ -16,7 +16,9 @@ from octovox_app.services import prod_pipeline as prod
 from octovox_app.services.prod_pipeline import (
     mic_health_report, perceptual_agc, feedback_risk, aec_partitioned, rtf_drift,
     condition_tracking_path, track_doa, dereverb_spectral, dd_wiener,
+    spatial_coherence, beamform_masked,
 )
+from octovox_app.services import pipeline as _ov
 from octovox_app.services.pipeline import POLARIS_UCA_M, SPEED_SOUND
 
 
@@ -349,3 +351,47 @@ def test_dd_wiener_no_edge_spike():
     out = dd_wiener(x, FS)
     assert np.max(np.abs(out)) <= np.max(np.abs(x)) + 1e-4
     assert np.all(np.isfinite(out))
+
+
+# ---------------------------------------------------------------------------
+#  spatial_coherence + beamform_masked  (ASA mask, auto-select)
+# ---------------------------------------------------------------------------
+def test_spatial_coherence_directional_vs_diffuse():
+    """A single directional plane-wave source is spatially COHERENT across mics;
+    independent per-channel noise is INCOHERENT. The cue must separate them."""
+    n = 2 * FS
+    src = _planewave_8ch(_speech_like(n, seed=50), az_deg=20.0)
+    Xs = _ov.stft_multich(np.ascontiguousarray(src.T))
+    rng = np.random.default_rng(51)
+    diffuse = (rng.standard_normal((8, n)) * 0.1).astype(np.float32)   # independent per mic
+    Xd = _ov.stft_multich(np.ascontiguousarray(diffuse.T))
+    assert spatial_coherence(Xs).mean() > spatial_coherence(Xd).mean() + 0.2
+
+
+def test_spatial_coherence_range():
+    src = _planewave_8ch(_speech_like(FS, seed=52), az_deg=0.0)
+    coh = spatial_coherence(_ov.stft_multich(np.ascontiguousarray(src.T)))
+    assert coh.min() >= 0.0 and coh.max() <= 1.0
+
+
+def test_beamform_masked_modes_return_valid_audio():
+    src = _planewave_8ch(_speech_like(2 * FS, seed=53), az_deg=15.0)
+    y = src + 0.05 * np.random.default_rng(54).standard_normal(src.shape).astype(np.float32)
+    for mode in ("snr", "coherent", "auto"):
+        mono, info = beamform_masked(y.astype(np.float32), FS, mask_mode=mode)
+        assert mono.shape[0] == y.shape[1]
+        assert np.all(np.isfinite(mono))
+        assert info["mask"] == mode
+
+
+def test_beamform_masked_auto_picks_one_of_the_two():
+    """AUTO must return exactly the snr or the coherent beam (never a third
+    thing) and report which it picked."""
+    src = _planewave_8ch(_speech_like(2 * FS, seed=55), az_deg=-20.0)
+    y = (src + 0.05 * np.random.default_rng(56).standard_normal(src.shape)).astype(np.float32)
+    snr_mono, _ = beamform_masked(y, FS, mask_mode="snr")
+    coh_mono, _ = beamform_masked(y, FS, mask_mode="coherent")
+    auto_mono, info = beamform_masked(y, FS, mask_mode="auto")
+    assert info["picked"] in ("snr", "coherent")
+    ref = snr_mono if info["picked"] == "snr" else coh_mono
+    np.testing.assert_allclose(auto_mono, ref, rtol=0, atol=1e-5)

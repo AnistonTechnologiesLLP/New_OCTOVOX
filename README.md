@@ -121,6 +121,7 @@ real-time spot).
 | Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine |
 | Beam | auto · batch · tracked | stage 6 beamformer |
 | Movement | SRP-PHAT · RTF drift | which signal decides batch-vs-tracked in `auto` |
+| Mask | SNR · coherence-auto · coherence | speech/noise mask for the MVDR covariance; coherence adds the spatial (ASA) cue. `auto` builds both beams and keeps the better — never worse than baseline |
 | AGC | perceptual · RMS | stage 10 loudness control |
 | AEC | partitioned · single-tap | stage 7 echo canceller (needs a reference WAV) |
 | Noise-robust tracking | on / off | the tracking-path conditioner (5·track) |

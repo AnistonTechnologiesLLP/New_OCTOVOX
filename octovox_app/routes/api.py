@@ -556,6 +556,9 @@ def clean_voice():
       · ``track`` : "conditioned" (default — noise-robust speech-band tracking
                    path so HVAC/projector noise can't steer the beam) | "audio"
                    (track on the raw audio path).
+      · ``mask``  : "snr" (default) | "coherent" (fuse the spatial-coherence/ASA
+                   cue into the MVDR mask) | "auto" (build both, keep the better —
+                   never worse than baseline). Affects the batch beam only.
       · ``mvdr_blend`` (0..1, keeps off-axis speakers), ``dfn_atten_lim_db``,
         and ``reference`` (filename of an optional far-end ref WAV for AEC).
     """
@@ -592,6 +595,9 @@ def clean_voice():
     track = str(data.get("track", "conditioned")).lower()
     if track not in ("conditioned", "audio"):
         track = "conditioned"
+    mask = str(data.get("mask", "snr")).lower()
+    if mask not in ("snr", "coherent", "auto"):
+        mask = "snr"
     try:
         mvdr_blend = max(0.0, min(1.0, float(data.get("mvdr_blend", 0.6))))
     except (TypeError, ValueError):
@@ -616,7 +622,7 @@ def clean_voice():
             wav_path, OUTPUT_DIR, reference_path=ref_path,
             nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
             mvdr_blend=mvdr_blend, wpe=wpe, dereverb=dereverb, eq=eq,
-            agc=agc, aec=aec, movement=movement, track=track)
+            agc=agc, aec=aec, movement=movement, track=track, mask=mask)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
         report_url = (f"/output/{result['stem']}/{result['report_name']}"

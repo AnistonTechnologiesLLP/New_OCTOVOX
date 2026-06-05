@@ -379,3 +379,30 @@ batch. The trackers can additionally run on a **noise-robust, phase-preserving
 speech-band copy** of the array (`condition_tracking_path`, the
 "Noise-robust tracking" toggle) so HVAC/projector noise can't pull either
 detector. Tests: `tests/test_prod_ports.py`.
+
+---
+
+## 12. Improving the MASK — spatial-coherence (ASA) cue
+
+The covariances in §2.2 are only as good as the mask that splits speech from
+noise T-F units, and `estimate_softmask` (§2.1) uses ONE cue: per-bin SNR. Worse,
+it does `mag = |X|.mean(axis=2)` — it collapses the 8 mics to mono *before*
+masking, so it is **blind to direction**. Auditory Scene Analysis (Bregman)
+calls spatial location a primary grouping cue; `spatial_coherence(X)`
+(prod_pipeline.py) recovers it: per T-F unit, the inter-mic magnitude-squared
+coherence with the reference, smoothed over a small neighbourhood. ≈1 → one
+directional source (speech); ≈0 → diffuse (late reverb, fan/HVAC). Fusing it
+gently into the mask (`M·(0.9 + 0.1·coh)`) pushes diffuse energy into Φ_v.
+
+**Measured (500-trial bootstrap, all 21 clips, seed-stable across 5 seeds):**
+large wins on multi-talker / moving / reverberant clips (`two_person_talk_2`
+**+11.8 dB**, `sitting_take2` +6.8, `take_3` +7.3, moving_* +4), mild losses on
+already-clean single-talker close-mic clips (`fully_close` −3.1, `single_person`
+−1.7). Mean **+1.8 dB**. The win/loss is NOT predicted by scene-mean coherence
+(a simple gate fails), so the shipped mode is **`mask="auto"`**: build both the
+SNR and coherent beams and keep whichever scores higher on an INDEPENDENT proxy
+(`_mask_select_proxy` — output separation judged on mask-defined frames, not the
+bootstrap's input-envelope frames). That keeps the full +1.8 dB mean while
+cutting the worst case from −2.8 dB to **−0.5 dB** — never meaningfully worse
+than baseline. Opt-in (`mask="snr"` default; `auto` runs the beamformer twice).
+Only the **batch** beam is affected. Tests: `tests/test_prod_ports.py`.

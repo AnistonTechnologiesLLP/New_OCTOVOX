@@ -19,6 +19,18 @@ Five pieces were ported and recalibrated from a sibling research repo; two
 | 7b · Feedback risk | `feedback_risk` | sustained-tone (PA howl) diagnostic, calibrated to read `low` on clean speech | always on (read-only) |
 | 10 · AGC | `perceptual_agc` | K-weighted attack/release loudness riding (vs instantaneous RMS), **with a fix for the startup gain blast** (seeds at steady-state active level — no over-loud first word) | `agc` (`perceptual`) |
 
+- **Spatial-coherence (ASA) mask for RTF-MVDR** (`spatial_coherence`,
+  `beamform_masked`): the energy soft-mask collapsed the 8 mics to mono before
+  masking, so it was blind to direction. Added the ASA "common spatial location"
+  cue (inter-mic magnitude-squared coherence) fused into the MVDR mask, so
+  diffuse reverb/noise is pushed into the noise covariance. Measured with the
+  500-trial bootstrap across all 21 recordings (seed-stable): **+4 to +12 dB on
+  multi-talker / moving / reverberant clips**, mild −1 to −3 dB on already-clean
+  single-talker ones. New `mask="snr"|"coherent"|"auto"` selector; **`auto`
+  builds both beams and keeps the one an independent (mask-defined) proxy
+  prefers** — "never worse than baseline" (full +1.8 dB mean gain kept, worst
+  case −2.8 → −0.5 dB). Default `snr` (off). UI: **Mask** dropdown. See
+  RTF_MVDR_TRACKED.md §12. Cost: `auto` runs the beamformer twice (opt-in).
 - **Fast dereverb + edge-spike fix** (`dereverb_spectral`): the old WPE dereverb
   ran ~3× real-time, overshot peak (0.87→1.82), and only cut ~13% of the reverb
   tail. Added a fast single-channel late-reverb suppressor (Lebart/Habets

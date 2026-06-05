@@ -181,7 +181,10 @@ def _stage_detail(key, s):
     if key == "rtf_drift":
         return f"steady {g('steady_median')} · {'moving → tracked' if g('moved') else 'static → batch'}"
     if key == "beamform":
-        return f"{str(g('method','')).replace('_beamform','')} · {g('blend','')}"
+        mk = g("mask", "snr")
+        mtag = ("" if mk == "snr" else
+                f" · mask:{(s.get('mask_info') or {}).get('picked', mk)}")
+        return f"{str(g('method','')).replace('_beamform','')} · {g('blend','')}{mtag}"
     if key == "aec":
         return f"ERLE {g('erle_db')} dB" + (f" · {g('n_taps')} taps" if g("n_taps") else "")
     if key == "feedback_risk":
