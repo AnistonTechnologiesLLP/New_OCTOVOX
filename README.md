@@ -89,8 +89,10 @@ The UI has three racks:
 
 ### Production pipeline stages
 
-Each `/api/clean` run drives `prod_pipeline.run_production`. WPE dereverb is
-multichannel, so it runs as a front-end (before the beam) when enabled.
+Each `/api/clean` run drives `prod_pipeline.run_production`. Dereverb has two
+engines: **spectral** (fast, single-channel, runs on the mono beam) and **WPE**
+(multichannel, runs as a front-end before the beam — the principled but ~3×
+real-time spot).
 
 | # | Stage | Notes |
 |---|-------|-------|
@@ -122,7 +124,7 @@ multichannel, so it runs as a front-end (before the beam) when enabled.
 | AGC | perceptual · RMS | stage 10 loudness control |
 | AEC | partitioned · single-tap | stage 7 echo canceller (needs a reference WAV) |
 | Noise-robust tracking | on / off | the tracking-path conditioner (5·track) |
-| WPE dereverb | on / off | multichannel front-end (slow; off by default) |
+| Dereverb | none · spectral · WPE | spectral = fast single-channel late-reverb suppressor (~0.02× RT); WPE = multichannel front-end (~3× RT). Off by default |
 | EQ | on / off | gentle speech-presence EQ |
 
 > **Note on tracking & beam-weighting.** The "noise-robust tracking" split is the

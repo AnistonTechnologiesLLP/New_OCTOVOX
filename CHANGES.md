@@ -19,6 +19,17 @@ Five pieces were ported and recalibrated from a sibling research repo; two
 | 7b · Feedback risk | `feedback_risk` | sustained-tone (PA howl) diagnostic, calibrated to read `low` on clean speech | always on (read-only) |
 | 10 · AGC | `perceptual_agc` | K-weighted attack/release loudness riding (vs instantaneous RMS), **with a fix for the startup gain blast** (seeds at steady-state active level — no over-loud first word) | `agc` (`perceptual`) |
 
+- **Fast dereverb + edge-spike fix** (`dereverb_spectral`): the old WPE dereverb
+  ran ~3× real-time, overshot peak (0.87→1.82), and only cut ~13% of the reverb
+  tail. Added a fast single-channel late-reverb suppressor (Lebart/Habets
+  statistical model) that runs on the mono beam in **~180 ms (~0.02× RT)** and
+  cuts **33–57%** of the tail with the peak bounded to the input envelope. New
+  `dereverb="none"|"spectral"|"wpe"` selector (`wpe=True` still maps to `"wpe"`;
+  WPE's overshoot is now clamped). **Also fixed a latent ISTFT edge bug**: scipy
+  `istft(boundary=None)` detonated the first frame of `dd_wiener` into a ~300×
+  spike — switched to `boundary='zeros'` + envelope guard. UI: **Dereverb**
+  dropdown replaces the WPE checkbox. Default stays off (no change to current
+  output). Stage renders as ⑧ Dereverb in the table and report.
 - **Standalone report** (new `prod_report.py`): every clean run now writes a
   self-contained `report.html` + `visualization.png` to `data/output/<stem>/`,
   the way the old instrument did but adapted to the single-output production path

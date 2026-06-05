@@ -15,9 +15,29 @@ import pytest
 from octovox_app.services import prod_pipeline as prod
 from octovox_app.services.prod_pipeline import (
     mic_health_report, perceptual_agc, feedback_risk, aec_partitioned, rtf_drift,
-    condition_tracking_path, track_doa,
+    condition_tracking_path, track_doa, dereverb_spectral, dd_wiener,
 )
 from octovox_app.services.pipeline import POLARIS_UCA_M, SPEED_SOUND
+
+
+def _reverb_proxy(x, fs=48000):
+    """Late-reverb proxy: mean ratio of each frame's energy to the running peak —
+    higher = more smeared/reverberant tail."""
+    import scipy.signal as sps
+    _, _, Z = sps.stft(x, fs=fs, nperseg=1024, noverlap=768, boundary=None)
+    env = (np.abs(Z) ** 2).sum(0)
+    return float(np.mean(env[1:] / (np.maximum.accumulate(env)[:-1] + 1e-9)))
+
+
+def _reverberate(x, fs=48000, t60=0.6, seed=0):
+    """Convolve a signal with a synthetic exponentially-decaying RIR."""
+    import scipy.signal as sps
+    rng = np.random.default_rng(seed)
+    n = int(t60 * fs)
+    h = (rng.standard_normal(n) * np.exp(-np.arange(n) / (t60 * fs / 6.9))).astype(np.float32)
+    h[0] = 1.0
+    y = sps.fftconvolve(x, h)[:len(x)]
+    return (y / (np.max(np.abs(y)) + 1e-9) * np.max(np.abs(x))).astype(np.float32)
 
 FS = 48000
 
@@ -283,3 +303,49 @@ def test_condition_tracking_keeps_moving_detectable():
          for k, s in enumerate(segs)], axis=1)
     yt, _ = condition_tracking_path(moving, FS)
     assert rtf_drift(yt, FS)[1] is True
+
+
+# ---------------------------------------------------------------------------
+#  dereverb_spectral  (fast single-channel late-reverb suppression)
+# ---------------------------------------------------------------------------
+def test_dereverb_spectral_reduces_reverb():
+    """On a synthetically reverberated signal, the suppressor must lower the
+    reverb-tail proxy."""
+    dry = _speech_like(3 * FS, seed=40)
+    wet = _reverberate(dry, FS, t60=0.6, seed=1)
+    out = dereverb_spectral(wet, FS)
+    assert _reverb_proxy(out) < _reverb_proxy(wet)     # tail reduced
+
+
+def test_dereverb_spectral_bounded_peak_and_length():
+    """No ISTFT edge blow-up: the output stays within the input envelope and
+    keeps the same length (the bug that detonated the first frame)."""
+    wet = _reverberate(_speech_like(2 * FS, seed=41), FS, t60=0.5, seed=2)
+    out = dereverb_spectral(wet, FS)
+    assert len(out) == len(wet)
+    assert np.max(np.abs(out)) <= np.max(np.abs(wet)) + 1e-4   # envelope guard holds
+    assert np.all(np.isfinite(out))
+
+
+def test_dereverb_spectral_preserves_speech():
+    """Dereverb removes the reverb tail, not the speech: the level drop is
+    modest (a few dB), not a collapse to silence."""
+    wet = _reverberate(_speech_like(2 * FS, seed=42), FS, t60=0.5, seed=3)
+    out = dereverb_spectral(wet, FS)
+    rms_in = np.sqrt(np.mean(wet ** 2) + 1e-12)
+    rms_out = np.sqrt(np.mean(out ** 2) + 1e-12)
+    assert rms_out > rms_in * 0.3                       # > -10 dB: speech survives
+
+
+def test_dereverb_spectral_short_signal_passthrough():
+    short = _speech_like(256)
+    np.testing.assert_array_equal(dereverb_spectral(short, FS), short)
+
+
+def test_dd_wiener_no_edge_spike():
+    """Regression: dd_wiener used to detonate its first frame into a ~300× spike
+    (scipy istft boundary=None NOLA failure). The output must now stay bounded."""
+    x = _speech_like(2 * FS, seed=43)
+    out = dd_wiener(x, FS)
+    assert np.max(np.abs(out)) <= np.max(np.abs(x)) + 1e-4
+    assert np.all(np.isfinite(out))

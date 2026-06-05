@@ -541,8 +541,10 @@ def clean_voice():
                    best quality but the slow stage) | "none".
       · ``beam`` : "auto" (default — tracked if the talker moved, else batch) |
                    "batch" | "tracked".
-      · ``wpe``  : WPE dereverb front-end (default FALSE — it is the slow stage;
-                   enable for a quality dereverb pass).
+      · ``dereverb`` : "none" (default) | "spectral" (fast single-channel late-
+                   reverb suppressor on the mono beam, ~0.02× RT) | "wpe"
+                   (multichannel front-end, ~3× RT, the quality pass).
+      · ``wpe``  : legacy bool — ``true`` ≡ ``dereverb="wpe"`` (kept for back-compat).
       · ``eq``   : apply the speech EQ (default true).
       · ``agc``  : "perceptual" (default — K-weighted attack/release loudness) |
                    "rms" (instantaneous RMS to target).
@@ -571,7 +573,12 @@ def clean_voice():
     beam = str(data.get("beam", "auto")).lower()
     if beam not in ("auto", "batch", "tracked"):
         beam = "auto"
-    wpe = bool(data.get("wpe", False))   # off in the fast path; opt-in quality dereverb
+    wpe = bool(data.get("wpe", False))   # legacy flag — superseded by `dereverb`
+    dereverb = data.get("dereverb")      # "none" | "spectral" | "wpe" (None → derive from wpe)
+    if dereverb is not None:
+        dereverb = str(dereverb).lower()
+        if dereverb not in ("none", "spectral", "wpe"):
+            dereverb = "none"
     eq = bool(data.get("eq", True))
     agc = str(data.get("agc", "perceptual")).lower()
     if agc not in ("perceptual", "rms"):
@@ -608,8 +615,8 @@ def clean_voice():
         result = prod.run_production(
             wav_path, OUTPUT_DIR, reference_path=ref_path,
             nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
-            mvdr_blend=mvdr_blend, wpe=wpe, eq=eq, agc=agc, aec=aec,
-            movement=movement, track=track)
+            mvdr_blend=mvdr_blend, wpe=wpe, dereverb=dereverb, eq=eq,
+            agc=agc, aec=aec, movement=movement, track=track)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
         report_url = (f"/output/{result['stem']}/{result['report_name']}"

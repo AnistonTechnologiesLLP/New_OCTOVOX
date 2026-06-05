@@ -232,8 +232,14 @@
             <option value="single">Single-tap</option>
           </select>
         </label>
+        <label class="ctl"><span class="ctl-lab">Dereverb</span>
+          <select id="prodDereverb" class="inp">
+            <option value="none" selected>None</option>
+            <option value="spectral">Spectral (fast)</option>
+            <option value="wpe">WPE (quality, slow)</option>
+          </select>
+        </label>
         <label class="ctl ctl-chk"><input type="checkbox" id="prodTrack" checked><span>Noise-robust tracking</span></label>
-        <label class="ctl ctl-chk"><input type="checkbox" id="prodWpe"><span>WPE dereverb <em>(slow)</em></span></label>
         <label class="ctl ctl-chk"><input type="checkbox" id="prodEq" checked><span>EQ</span></label>
       </div>
       <div class="cs-actions">

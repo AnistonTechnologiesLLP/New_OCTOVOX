@@ -142,7 +142,8 @@ _STAGE_TITLES = {
     "mic_capsules": "① Mic capsules", "mic_health": "① Mic health",
     "calibrate": "② Channel calibration", "highpass": "③ High-pass filter",
     "noise_floor": "③ Noise-floor estimate", "track_conditioning": "⑤ Tracking path",
-    "dereverb_wpe": "⑧ Dereverb (WPE front-end)", "vad": "④ VAD / speech detector",
+    "dereverb_wpe": "⑧ Dereverb (WPE front-end)",
+    "dereverb_spectral": "⑧ Dereverb (spectral)", "vad": "④ VAD / speech detector",
     "doa": "⑤ DOA / talker tracking", "rtf_drift": "⑤ RTF-drift movement",
     "beamform": "⑥ Beamforming (MVDR 8→1)", "aec": "⑦ AEC (far-end ref)",
     "feedback_risk": "⑦ Feedback / howl risk", "noise_reduction": "⑧ Noise reduction",
@@ -171,6 +172,8 @@ def _stage_detail(key, s):
         return f"{g('noise_floor_dbfs')} dBFS"
     if key == "track_conditioning":
         return f"noise-robust {'-'.join(str(v) for v in s.get('band_hz', []))} Hz"
+    if key == "dereverb_spectral":
+        return f"late-reverb suppress · {g('rms_change_db')} dB"
     if key == "vad":
         return f"speech {g('speech_ratio', 0)*100:.0f}%"
     if key == "doa":

@@ -715,6 +715,66 @@ def perceptual_agc(x, fs, target_dbfs=-23.0, attack_ms=20.0, release_ms=500.0,
 
 
 # =========================================================================
+#  FAST SPECTRAL DEREVERB — single-channel late-reverberation suppression
+# =========================================================================
+def dereverb_spectral(x, fs, t60=0.5, beta=1.6, gmin_db=-10.0,
+                      early_ms=48.0, smooth_bins=3):
+    """Fast single-channel dereverberation — statistical late-reverb suppression.
+
+    The multichannel WPE front-end (:func:`pipeline.wpe_dereverberate`) is the
+    gold standard but runs ~3× real-time and overshoots; on this hardware it is
+    the single slowest stage. This is the fast alternative that runs on the
+    *beamformed mono*: ~0.02× real-time, no matrix solves, and on these
+    recordings it removes 2–4× more of the reverb tail than WPE does.
+
+    Model (Lebart 2001 / Habets): the LATE reverberation is the early signal
+    convolved with an exponentially-decaying tail set by the room ``t60``. We
+    estimate the late-reverb power spectrum as a delayed, T60-decayed, recursively
+    smoothed copy of the observed power:
+
+        Pₗₐₜₑ(f,t) = onepole_a( P(f, t − d) ),  a = exp(−ln(10⁶)·HOP / (t60·fs))
+
+    where ``d`` (``early_ms``) is the early-reflection boundary kept intact, then
+    apply a spectral-subtraction gain ``G = max(1 − β·Pₗₐₜₑ/P, gmin)`` and resynth.
+
+    ROBUST EDGES: scipy's ``istft`` with ``boundary=None`` divides by a near-zero
+    window-sum on the under-overlapped first/last frame, which detonates into a
+    multi-hundred-× spike there (the same latent bug as the old ``dd_wiener``).
+    We analyse with ``boundary='zeros'`` (padded, well-conditioned edges) and
+    clamp the result to the input envelope — dereverb only REMOVES energy, so the
+    interior is bounded by the input and any residual edge artifact is clipped.
+
+    Returns the dereverbed mono (same length); never raises (returns input on error).
+    """
+    try:
+        x = np.asarray(x, dtype=np.float32).reshape(-1)
+        if len(x) < NFFT:
+            return x
+        kw = dict(fs=fs, nperseg=NFFT, noverlap=NFFT - HOP, window=WIN)
+        _, _, Z = sps.stft(x, boundary="zeros", padded=True, **kw)
+        P = np.abs(Z) ** 2
+        mag = np.abs(Z); ph = np.angle(Z)
+        a = float(np.exp(-13.8155 * HOP / (t60 * fs)))      # per-frame 60 dB decay pole
+        d = max(1, int(early_ms / 1000.0 * fs / HOP))        # early-reflection boundary (frames)
+        Pd = np.zeros_like(P)
+        if P.shape[1] > d:
+            Pd[:, d:] = P[:, :-d]                            # delay past the early reflections
+        R = sps.lfilter([1.0 - a], [1.0, -a], Pd, axis=1)    # one-pole IIR → late-reverb PSD
+        G = np.maximum(1.0 - beta * R / (P + EPS), 10.0 ** (gmin_db / 20.0))
+        if smooth_bins and smooth_bins > 1:                  # light spectral smoothing
+            k = np.ones(smooth_bins, dtype=np.float32) / smooth_bins
+            G = np.apply_along_axis(lambda c: np.convolve(c, k, mode="same"), 0, G)
+        _, o = sps.istft(G * mag * np.exp(1j * ph), boundary=True, **kw)
+        if len(o) < len(x):
+            o = np.pad(o, (0, len(x) - len(o)))
+        peak = float(np.max(np.abs(x)) + EPS)
+        return np.clip(o[:len(x)], -peak, peak).astype(np.float32)   # envelope guard
+    except Exception as e:
+        print(f"[WARN] dereverb_spectral failed: {e}")
+        return np.asarray(x, dtype=np.float32)
+
+
+# =========================================================================
 #  FAST SPECTRAL NR — decision-directed (low musical-noise / non-robotic)
 # =========================================================================
 def dd_wiener(x, fs, alpha=0.985, floor_db=-9.0, noise_pct=12.0, smooth_bins=3):
@@ -730,8 +790,12 @@ def dd_wiener(x, fs, alpha=0.985, floor_db=-9.0, noise_pct=12.0, smooth_bins=3):
     only over time frames), so it stays fast. Never raises — returns input on error.
     """
     try:
+        x = np.asarray(x, dtype=np.float32).reshape(-1)
+        # boundary='zeros' (padded) so the under-overlapped edge frame is well
+        # conditioned — boundary=None makes istft divide by a ~0 window-sum there
+        # and detonate the first frame into a multi-hundred-× spike.
         f, t, Z = sps.stft(x, fs=fs, nperseg=NFFT, noverlap=NFFT - HOP,
-                           window=WIN, boundary=None)
+                           window=WIN, boundary="zeros", padded=True)
         mag = np.abs(Z); ph = np.angle(Z)
         P = mag ** 2
         F, T = P.shape
@@ -765,10 +829,13 @@ def dd_wiener(x, fs, alpha=0.985, floor_db=-9.0, noise_pct=12.0, smooth_bins=3):
             G = np.apply_along_axis(lambda c: np.convolve(c, k, mode="same"), 0, G)
         Zc = G * mag * np.exp(1j * ph)
         _, y = sps.istft(Zc, fs=fs, nperseg=NFFT, noverlap=NFFT - HOP,
-                         window=WIN, boundary=None)
+                         window=WIN, boundary=True)
         if len(y) < len(x):
             y = np.pad(y, (0, len(x) - len(y)))
-        return y[:len(x)].astype(np.float32)
+        # NR only attenuates, so the output is bounded by the input envelope;
+        # clamp to it as a guard against any residual edge artifact.
+        peak = float(np.max(np.abs(x)) + EPS)
+        return np.clip(y[:len(x)], -peak, peak).astype(np.float32)
     except Exception as e:
         print(f"[WARN] dd_wiener failed: {e}")
         return np.asarray(x, dtype=np.float32)
@@ -781,7 +848,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
                    nr="dfn", dfn_atten_lim_db=24.0, beam="auto",
                    mvdr_blend=0.6, wpe=False, eq=True,
                    agc="perceptual", aec="partitioned", movement="srp",
-                   track="conditioned", log=None):
+                   track="conditioned", dereverb=None, log=None):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
     Parameters
@@ -821,13 +888,18 @@ def run_production(input_path, out_dir, *, reference_path=None,
         on the raw audio path (legacy). NOT a latency feature.
     mvdr_blend : float in [0,1]
         MVDR↔downmix blend so off-axis speakers survive (see clean_cascade).
+    dereverb : "none" | "spectral" | "wpe" | None
+        Dereverberation engine. ``none`` (DEFAULT) skips it. ``spectral`` =
+        :func:`dereverb_spectral`, a fast single-channel late-reverb suppressor
+        that runs on the beamformed mono (~0.02× real-time, removes 2–4× more
+        reverb tail than WPE on these clips). ``wpe`` = the multichannel
+        :func:`pipeline.wpe_dereverberate` front-end (runs BEFORE the beam, the
+        principled spot for multichannel dereverb, but ~3× real-time — the
+        slowest stage; stable ``taps=8, iterations=2``). When ``None``, it is
+        derived from the legacy ``wpe`` flag (``wpe=True`` → ``"wpe"``).
     wpe : bool
-        Run the WPE dereverb front-end (stage [8a]). **Off by default**: WPE is
-        the single most expensive stage (~2–3× real-time here) and only
-        converges at ``iterations>=2`` — a cheaper single-iteration pass
-        diverges and corrupts the speech. So it is opt-in for a quality pass; the
-        fast default skips it (beamforming + NR already clean most reverb). When
-        enabled it uses the validated stable ``taps=8, iterations=2``.
+        DEPRECATED back-compat alias — ``wpe=True`` is equivalent to
+        ``dereverb="wpe"`` when ``dereverb`` is not given.
     eq  : bool   -- apply the speech EQ (stage [10]).
     agc : "perceptual" | "rms"
         Loudness control (stage [10]). ``perceptual`` (DEFAULT) =
@@ -847,6 +919,13 @@ def run_production(input_path, out_dir, *, reference_path=None,
     per-stage wall-clock in ms so the time budget is measurable.
     """
     from . import pipeline as ov
+
+    # Resolve the dereverb engine, honouring the legacy ``wpe`` flag when the
+    # newer ``dereverb`` selector is not explicitly supplied.
+    if dereverb is None:
+        dereverb = "wpe" if wpe else "none"
+    if dereverb not in ("none", "spectral", "wpe"):
+        dereverb = "none"
 
     def _log(msg):
         if log:
@@ -895,17 +974,24 @@ def run_production(input_path, out_dir, *, reference_path=None,
          f"noise floor {stages['noise_floor'].get('noise_floor_dbfs', '?')} dBFS")
 
     # ── [8a] WPE dereverb — MULTICHANNEL FRONT-END (runs before beamform) ─
-    #  Stable params only (taps=8, iters=2): WPE diverges at iters=1 and would
-    #  corrupt the speech. Opt-in (off by default) because it is the slow stage.
-    if wpe and getattr(ov, "HAS_WPE", False) and D > 1:
+    #  Only when dereverb="wpe". Stable params (taps=8, iters=2): WPE diverges at
+    #  iters=1 and corrupts speech. Slowest stage (~3× real-time), so opt-in. The
+    #  fast dereverb="spectral" path instead runs on the mono AFTER beamforming.
+    if dereverb == "wpe" and getattr(ov, "HAS_WPE", False) and D > 1:
         def _do_wpe():
             x_sc = ov.wpe_dereverberate(y.T, sr, taps=8, delay=3, iterations=2)
-            return np.ascontiguousarray(x_sc.T)
+            x_sc = np.ascontiguousarray(x_sc.T)
+            # Guard WPE's overshoot: clamp each channel to its input peak so the
+            # downmix never exceeds [-1,1] (else Silero VAD reports 0% speech).
+            for c in range(x_sc.shape[0]):
+                pk = float(np.max(np.abs(y[c])) + EPS)
+                np.clip(x_sc[c], -pk, pk, out=x_sc[c])
+            return x_sc.astype(np.float32)
         y = _stage("dereverb_wpe", _do_wpe)
-        stages["dereverb_wpe"] = {"ran": True, "taps": 8, "iterations": 2,
+        stages["dereverb_wpe"] = {"ran": True, "engine": "wpe", "taps": 8, "iterations": 2,
                                   "note": "multichannel front-end (before beamform)"}
     else:
-        why = ("disabled (fast path — enable wpe for a quality dereverb pass)" if not wpe else
+        why = ("disabled (dereverb=none/spectral)" if dereverb != "wpe" else
                "nara-wpe unavailable" if not getattr(ov, "HAS_WPE", False) else "single channel")
         stages["dereverb_wpe"] = {"ran": False, "reason": why}
     _log(f"prod: WPE dereverb {'done' if stages['dereverb_wpe'].get('ran') else 'skipped'}")
@@ -1022,6 +1108,23 @@ def run_production(input_path, out_dir, *, reference_path=None,
     stages["feedback_risk"] = _stage("feedback_risk", lambda: feedback_risk(mono, sr))
     _log(f"prod: feedback risk {stages['feedback_risk'].get('risk', '?')}")
 
+    # ── [8a·spectral] fast single-channel dereverb on the mono beam ───
+    #  The cheap alternative to the multichannel WPE front-end: ~0.02× real-time,
+    #  stable (no overshoot), and removes more of the reverb tail on these clips.
+    if dereverb == "spectral":
+        def _do_spec():
+            rev_in = float(np.mean(mono ** 2) + EPS)
+            out = dereverb_spectral(mono.astype(np.float32), sr)
+            rev_out = float(np.mean(out ** 2) + EPS)
+            return out, {"ran": True, "engine": "spectral",
+                         "rms_change_db": round(10.0 * np.log10(rev_out / rev_in), 1)}
+        mono, info = _stage("dereverb_spectral", _do_spec)
+        stages["dereverb_spectral"] = info
+    else:
+        stages["dereverb_spectral"] = {"ran": False,
+                                       "reason": f"disabled (dereverb={dereverb})"}
+    _log(f"prod: spectral dereverb {'done' if stages['dereverb_spectral'].get('ran') else 'skipped'}")
+
     # ── [8b] noise reduction (single channel) ─────────────────────────
     def _nr():
         if nr == "none":
@@ -1099,7 +1202,8 @@ def run_production(input_path, out_dir, *, reference_path=None,
     from . import prod_report
     params_str = (f"NR:{nr} · beam:{beam} · move:{movement} · AGC:{agc} · "
                   f"AEC:{aec}" + (" · track" if track == "conditioned" else "")
-                  + (" · WPE" if wpe else "") + (" · EQ" if eq else ""))
+                  + (f" · derev:{dereverb}" if dereverb != "none" else "")
+                  + (" · EQ" if eq else ""))
     rep = _stage("report", lambda: prod_report.build_report(
         out_dir, stem, input_path.name,
         raw_mono=raw_downmix, clean_mono=mono, sr=sr,

@@ -1053,7 +1053,7 @@ function getProdOpts() {
     aec:  ($("prodAec")  || {}).value || "partitioned",
     movement: ($("prodMovement") || {}).value || "srp",
     track: ($("prodTrack") ? ($("prodTrack").checked ? "conditioned" : "audio") : "conditioned"),
-    wpe:  !!($("prodWpe") && $("prodWpe").checked),
+    dereverb: ($("prodDereverb") || {}).value || "none",
     eq:    ($("prodEq") ? $("prodEq").checked : true),
   };
 }
@@ -1130,7 +1130,8 @@ function renderProduction(j) {
 }
 
 function opthLabel(o) {
-  return `NR:${o.nr}${o.wpe ? " +WPE" : ""} · beam:${o.beam}${o.eq ? " · EQ" : ""}`;
+  const dv = (o.dereverb && o.dereverb !== "none") ? ` · derev:${o.dereverb}` : "";
+  return `NR:${o.nr}${dv} · beam:${o.beam}${o.eq ? " · EQ" : ""}`;
 }
 
 /** Point the "Report" button at the standalone HTML report (opens in a new tab),
@@ -1226,6 +1227,7 @@ const PROD_STAGE_LABELS = {
   highpass:       ["③ High-pass filter",         s => s.ran ? `${s.cutoff_hz} Hz · order ${s.order}` : s.reason],
   noise_floor:    ["③ Noise-floor estimate",     s => s.ran ? `${s.noise_floor_dbfs} dBFS` : s.reason],
   dereverb_wpe:   ["⑧ Dereverb (WPE front-end)", s => s.ran ? `taps ${s.taps} · iters ${s.iterations}` : s.reason],
+  dereverb_spectral: ["⑧ Dereverb (spectral)",   s => s.ran ? `late-reverb suppress · ${s.rms_change_db} dB` : s.reason],
   vad:            ["④ VAD / speech detector",    s => s.ran ? `speech ${(s.speech_ratio*100).toFixed(0)}%` : s.reason],
   track_conditioning: ["⑤ Tracking path",        s => s.ran ? `noise-robust ${(s.band_hz||[]).join("–")} Hz` : s.reason],
   doa:            ["⑤ DOA / talker tracking",    s => s.ran ? `az ${(s.az_per_block||[]).join("/")}° · spread ${s.az_spread_deg}°` : s.reason],
