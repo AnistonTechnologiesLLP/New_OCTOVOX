@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────
+#  OCTOVOX — OPTIONAL dependencies
+# ─────────────────────────────────────────────────────────────────────
+#  These are intentionally NOT in requirements.txt: each pulls in a large
+#  neural model (100+ MB) and/or a pinned torch build, and the core
+#  6-beamformer pipeline runs fine without them. Install only what you
+#  want; anything missing is skipped at runtime with a one-line log
+#  message, and the other algorithms keep working.
+#
+#  torch wheels: the 2.1.2 pins below only have wheels up to Python 3.11.
+#  On newer Python, install a newer torch (see requirements.txt notes).
+#
+#  Install everything optional (Python 3.11):
+#     py -3.11 -m pip install -r requirements-optional.txt
+# ─────────────────────────────────────────────────────────────────────
+
+# ── DeepFilterNet2 — Sprint C: 7th competing algorithm ───────────────
+#  A 48 kHz single-channel neural denoiser (Schröter et al., ICASSP 2022,
+#  arXiv:2205.05474) run on the reference mic. It competes against the 6
+#  beamformers so the leaderboard answers "does 8-mic beamforming beat
+#  1-mic + neural denoising?". It is NOT a winner-polish step.
+#
+#  NOTE: the only package on PyPI is `deepfilternet` 0.5.6, which bundles
+#  the DeepFilterNet2 / DeepFilterNet3 pretrained weights and exposes the
+#  init_df()/enhance() API. OCTOVOX pins DFN to CPU (CUDA_VISIBLE_DEVICES=""
+#  + config DEVICE=cpu) to dodge the historical CUDA/CPU tensor-mismatch
+#  crash; see octovox_app/services/pipeline.py and tests/pilot_dfn2.py.
+deepfilternet==0.5.6
+soundfile>=0.12            # WAV I/O used by the DFN pilot
+
+# ── Neural-MVDR-WPE — WPE dereverb + Silero VAD + MVDR ───────────────
+nara-wpe>=0.0.9
+
+# ── torch (shared by DeepFilterNet2, Neural-MVDR-WPE, Silero VAD) ────
+#  CPU build is sufficient — OCTOVOX pins DFN to CPU regardless. For GPU
+#  acceleration of Silero VAD only, install the matching CUDA build per
+#  the notes in requirements.txt instead.
+torch==2.1.2
+torchaudio==2.1.2

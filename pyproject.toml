@@ -1,0 +1,31 @@
+# Tooling config for OCTOVOX. This is deliberately NOT a build/packaging file —
+# the project is run from source (run.py) and deployed as a Docker image, not
+# pip-installed — so there's no [build-system]/[project] table. It only
+# configures the dev tools the CI pipeline runs: pytest and ruff.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Only the test_*.py modules are real test suites; the others under tests/ are
+# one-off generators/pilots (make_azimuth_sweep.py, pilot_dfn2.py) that aren't
+# pytest tests and must not be collected.
+python_files = ["test_*.py"]
+addopts = "-ra -q"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# The pipeline DSP code predates linting and uses dense numerical style; lint
+# the app package and tests, but don't fail CI on stylistic nits there yet.
+extend-exclude = [".venv", ".venv311", "venv", "data"]
+
+[tool.ruff.lint]
+# Start conservative: pyflakes (F) catches real bugs (undefined names, unused
+# imports); pycodestyle errors (E9) catch syntax problems. Expand over time.
+select = ["F", "E9"]
+# Deferred, not waived: the dense DSP/plotting code in pipeline.py carries many
+# intentional unused locals (shape unpacks like `F, L, M = ...` kept for
+# readability, plot handles kept for side effects) and a few placeholder-less
+# f-strings. These are stylistic, not bugs — enforcing them now would mean
+# churning numerical code with no behavioral benefit. Drop these ignores and
+# clean up incrementally when that code is next touched.
+ignore = ["F841", "F541"]

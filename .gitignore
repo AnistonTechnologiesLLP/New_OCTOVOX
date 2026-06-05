@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv311/
+venv/
+
+# Runtime artifacts
+data/output/*
+!data/output/.gitkeep
+octovox_app/static/uploads/mic.*

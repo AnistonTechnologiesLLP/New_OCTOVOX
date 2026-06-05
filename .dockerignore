@@ -1,0 +1,29 @@
+# Keep the build context small & reproducible — don't ship local cruft.
+.git
+.github
+.venv
+.venv311
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+
+# Local virtualenvs / caches
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Runtime artifacts (regenerated at run time; data dirs are recreated on boot)
+data/output/*
+!data/output/.gitkeep
+octovox_app/static/uploads/mic.*
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+
+# Docs & dev-only files not needed in the image
+*.md
+!README.md
+tests
