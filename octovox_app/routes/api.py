@@ -537,10 +537,12 @@ def clean_voice():
     is never silent and the time budget is measurable.
 
     Speed-first knobs (all optional):
-      · ``nr``   : "fast" (Wiener, default, no neural cost) | "dfn" (DeepFilterNet3,
-                   best quality but the slow stage) | "none".
-      · ``beam`` : "tracked" (default — moving-talker beam) | "auto" (tracked if
-                   the talker moved, else batch) | "batch".
+      · ``nr``   : "dfn" (DeepFilterNet3, default — natural, the slow stage) |
+                   "fast" (decision-directed Wiener, no neural cost) | "none".
+      · ``beam`` : "auto" (default — batch RTF-MVDR, switching to the tracked beam
+                   only on genuine sustained movement; faster and higher-SNR on
+                   most clips, and the only path the ASA ``mask`` applies to) |
+                   "batch" | "tracked" (force a moving-talker beam).
       · ``dereverb`` : "none" (default) | "spectral" (fast single-channel late-
                    reverb suppressor on the mono beam, ~0.02× RT) | "wpe"
                    (multichannel front-end, ~3× RT, the quality pass).
@@ -561,6 +563,11 @@ def clean_voice():
                    the MVDR mask) | "snr". Affects the batch beam only.
       · ``mvdr_blend`` (0..1, keeps off-axis speakers), ``dfn_atten_lim_db``,
         and ``reference`` (filename of an optional far-end ref WAV for AEC).
+      · ``report`` : bool (default false) — render the standalone HTML report +
+                   matplotlib figure. Off by default so the 200–700 ms render is
+                   opt-in; when false ``report`` in the response is null.
+      · ``doa_readout`` : bool (default false) — run the SRP-PHAT azimuth readout
+                   (diagnostic only; never steers the beam on this UCA).
     """
     data = request.get_json(force=True, silent=True) or {}
     fname = data.get("filename")
@@ -573,9 +580,9 @@ def clean_voice():
     nr = str(data.get("nr", "dfn")).lower()
     if nr not in ("fast", "dfn", "none"):
         nr = "dfn"
-    beam = str(data.get("beam", "tracked")).lower()
+    beam = str(data.get("beam", "auto")).lower()
     if beam not in ("auto", "batch", "tracked"):
-        beam = "tracked"
+        beam = "auto"
     wpe = bool(data.get("wpe", False))   # legacy flag — superseded by `dereverb`
     dereverb = data.get("dereverb")      # "none" | "spectral" | "wpe" (None → derive from wpe)
     if dereverb is not None:
@@ -619,6 +626,12 @@ def clean_voice():
         pause_floor_db = float(data.get("pause_floor_db", -40.0))
     except (TypeError, ValueError):
         pause_floor_db = -40.0
+    # Standalone HTML report (matplotlib): OPT-IN on the hot path — the render is
+    # 200–700 ms the request would otherwise wait on. Default off.
+    report = bool(data.get("report", False))
+    # SRP-PHAT azimuth readout (diagnostic only — never drives the beam on this
+    # UCA). Default off; it auto-runs when the auto decision actually needs it.
+    doa_readout = bool(data.get("doa_readout", False))
     # Optional far-end reference for stage [7] AEC (else AEC is a clean skip).
     ref_path = None
     ref_name = data.get("reference")
@@ -633,7 +646,8 @@ def clean_voice():
             nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
             mvdr_blend=mvdr_blend, wpe=wpe, dereverb=dereverb, eq=eq,
             agc=agc, aec=aec, movement=movement, track=track, mask=mask,
-            residual=residual, pause_floor_db=pause_floor_db)
+            residual=residual, pause_floor_db=pause_floor_db,
+            doa_readout=doa_readout, report=report)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
         report_url = (f"/output/{result['stem']}/{result['report_name']}"

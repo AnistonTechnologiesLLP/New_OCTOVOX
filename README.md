@@ -102,9 +102,9 @@ real-time spot).
 | 3 | High-pass + noise-floor estimate | zero-phase HPF (HVAC rumble) |
 | 5·track | **Tracking-path conditioning** | noise-robust, phase-preserving speech-band copy of the array for the trackers only (audio path untouched) |
 | 4 | VAD / speech detector | Silero |
-| 5 | DOA / talker tracking | block-wise SRP-PHAT (azimuth readout) |
-| 5b | **Movement selector** | SRP-PHAT spread *or* **RTF drift** (ambiguity-free; auto-switches batch↔tracked) |
-| 6 | Beamforming 8→1 | batch / tracked RTF-MVDR (+ downmix blend) |
+| 5 | DOA / talker tracking | block-wise SRP-PHAT (azimuth readout — **opt-in diagnostic**; front/back ambiguous on this UCA so it never steers the beam) |
+| 5b | **Movement selector** | SRP-PHAT spread *or* **RTF drift** (ambiguity-free; auto-switches batch↔tracked). Runs only when it can change the beam (`beam=auto`) |
+| 6 | Beamforming 8→1 | batch / tracked RTF-MVDR (+ downmix blend). **Default `auto`** = batch (cheaper *and* higher-SNR on most clips), switching to tracked only on sustained movement |
 | 7 | AEC (far-end ref) | **partitioned** multi-tap or single-tap NLMS (active only with a reference WAV) |
 | 7b | **Feedback / howl risk** | sustained-tone diagnostic (read-only) |
 | 8 | Noise reduction | DeepFilterNet3 (default 32 dB cap) / decision-directed Wiener / none |
@@ -119,16 +119,18 @@ real-time spot).
 
 | Control | Options | What it does |
 |---------|---------|--------------|
-| Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine (DFN3 capped at 32 dB) |
+| **Preset** | **Quality** · Fast · Custom | one-click profiles. **Quality** (default) = the full DFN3 chain below, output unchanged. **Fast** = lowest runtime (`nr=fast`, `beam=batch` so the movement detectors are skipped, `mask=coherence`, lighter residual) — **~0.33× real-time vs ~0.44× for Quality**. Touching any knob flips to Custom |
+| Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine (DFN3 capped at 32 dB). **Default DFN3** |
 | Denoise strength | 0 … 1 slider (default 0.6) | stage 8c residual mop-up — 0 = off, ~0.3 gentle, 0.6 natural, 1.0 near-silent bed |
-| Beam | auto · batch · tracked | stage 6 beamformer |
-| Movement | SRP-PHAT · RTF drift | which signal decides batch-vs-tracked in `auto` |
-| Mask | SNR · coherence-auto · coherence | speech/noise mask for the MVDR covariance; coherence adds the spatial (ASA) cue. `auto` builds both beams and keeps the better — never worse than baseline |
-| AGC | perceptual · RMS | stage 10 loudness control |
+| Beam | **auto** · batch · tracked | stage 6 beamformer. **Default `auto`** — batch on static clips (cheaper + higher-SNR, and the only path the Mask applies to), tracked only on sustained movement |
+| Movement | SRP-PHAT · RTF drift | which signal decides batch-vs-tracked in `auto` (default **RTF drift**). Runs only when `beam=auto` |
+| Mask | SNR · coherence-auto · coherence | speech/noise mask for the MVDR covariance; coherence adds the spatial (ASA) cue. **`auto`** (default) builds both beams and keeps the better — never worse than baseline. Affects the batch beam only |
+| AGC | perceptual · **RMS** | stage 10 loudness control (default **RMS**, instantaneous) |
 | AEC | partitioned · single-tap | stage 7 echo canceller (needs a reference WAV) |
 | Noise-robust tracking | on / off | the tracking-path conditioner (5·track) |
 | Dereverb | none · spectral · WPE | spectral = fast single-channel late-reverb suppressor (~0.02× RT); WPE = multichannel front-end (~3× RT). Off by default |
 | EQ | on / off | gentle speech-presence EQ |
+| **Generate report** | on / **off** | stage [report] HTML + matplotlib figure. **Off by default** so the 200–700 ms render is opt-in (it's not needed for the clean WAV) |
 
 > **Note on tracking & beam-weighting.** The "noise-robust tracking" split is the
 > transferable idea from ceiling-array products (Biamp Parlé et al.): the
@@ -156,15 +158,18 @@ estimators and post-filters directly. See
 data/output/<recording_stem>/
   ├── clean_prod.wav            # the clean mono voice (production path output)
   ├── input_mono.wav            # raw 8-ch downmix, for A/B comparison
-  ├── report.html               # standalone report (open in any browser — see below)
-  ├── visualization.png         # 4-panel figure embedded in the report
+  ├── report.html               # standalone report — only when "Generate report" is on
+  ├── visualization.png         # 4-panel figure embedded in the report (report only)
   └── …                         # extra instrument outputs only if the instrument is run
 ```
 
 ### Report
 
-Every clean run writes a self-contained **`report.html`** (the **📄 Report**
-button in the console opens it; `/api/clean` also returns its URL). It embeds
+When the **Generate report** toggle is on (it is **off by default** so the
+matplotlib render stays off the request hot path — set `report=true` on
+`/api/clean`, or tick the box in the console), a clean run writes a
+self-contained **`report.html`** (the **📄 Report** button opens it; `/api/clean`
+returns its URL, or `null` when the report was skipped). It embeds
 everything inline so the single file is portable: raw-vs-clean A/B players, a KPI
 strip (levels, noise-floor before→after, engines, process time), a 4-panel
 visualization (waveforms, raw & clean spectrograms, per-mic health bars), the

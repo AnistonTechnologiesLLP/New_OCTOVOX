@@ -357,28 +357,38 @@ median + win-rate**.
 
 The instrument above tells you *which beam wins per clip*; the production
 pipeline ([`prod_pipeline.py`](octovox_app/services/prod_pipeline.py)) has to
-**decide live, per recording, without a bootstrap**. Two detectors feed the
-`beam="auto"` choice:
+**decide live, per recording, without a bootstrap**. The default is now
+**`beam="auto"`** with **`movement="rtf"`** (as of 2026-06-06 — `auto` is both
+faster than forcing `tracked` and higher-SNR on most clips, *and* it is the only
+beam the §12 mask applies to). Two detectors can feed the `auto` choice:
 
-- **SRP-PHAT spread** (`track_doa`, `movement="srp"`, default) — block-wise
-  azimuth; reported as a readout but **not acted on**, because this UCA has a
-  front/back ±180° ambiguity that swings the azimuth even for a static talker.
-- **RTF drift** (`rtf_drift`, `movement="rtf"`) — measures how much the *RTF
-  itself* (the quantity §2.3 / §4 steer with) changes block-to-block. It drops
-  the onset-settling transition and fires on the **median of the steady
-  transitions**, which requires *sustained* change. Being angle-free, it has
-  none of the front/back ambiguity, so `auto` **does** act on it: sustained
-  drift → tracked beam, else batch. Measured margin on this project's clips:
-  every real/static recording sits at steady-median ≤ 0.01, while
-  `synth_azimuth_sweep.wav` (§9's motion asset) sits at ~0.30 — so the default
-  threshold is 0.12.
+- **RTF drift** (`rtf_drift`, `movement="rtf"`, **default**) — measures how much
+  the *RTF itself* (the quantity §2.3 / §4 steer with) changes block-to-block. It
+  drops the onset-settling transition and fires on the **median of the steady
+  transitions**, which requires *sustained* change. Being angle-free, it has none
+  of the front/back ambiguity, so `auto` **acts on it**: sustained drift → tracked
+  beam, else batch. Measured margin on this project's clips: every real/static
+  recording sits at steady-median ≤ 0.01, while `synth_azimuth_sweep.wav` (§9's
+  motion asset) sits at ~0.30 — so the default threshold is 0.12.
+- **SRP-PHAT spread** (`track_doa`, `movement="srp"`) — block-wise azimuth;
+  reported as a **readout but not acted on**, because this UCA has a front/back
+  ±180° ambiguity that swings the azimuth even for a static talker.
 
 This matches §10's verdict (tracked wins on genuine motion, batch on static
 talkers): RTF drift flags the sweep as moving and leaves every static clip on
 batch. The trackers can additionally run on a **noise-robust, phase-preserving
 speech-band copy** of the array (`condition_tracking_path`, the
 "Noise-robust tracking" toggle) so HVAC/projector noise can't pull either
-detector. Tests: `tests/test_prod_ports.py`.
+detector.
+
+**Efficiency (2026-06-06):** the movement detectors are not free (each does its
+own 8-channel STFT + per-block covariance build), so they now run **only when
+they can change the beam**. With `beam="auto"` exactly the *selected* detector
+runs (`rtf_drift` for `movement="rtf"`, `track_doa` for `"srp"`); the other, and
+the SRP azimuth readout, are skipped unless `doa_readout=True`. When `beam` is
+**forced** (`batch`/`tracked`) all of them — plus `condition_tracking_path` — are
+skipped, since the decision is already made. The Fast preset uses `beam="batch"`
+precisely to drop this whole block. Tests: `tests/test_prod_ports.py`.
 
 ---
 

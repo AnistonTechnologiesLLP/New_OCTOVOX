@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-06-06 — CPU efficiency pass: faster *and* better defaults
+
+A runtime/quality pass on the production path. The headline: the live default
+beamformer had drifted to `tracked`, which was a **triple loss** — the per-frame
+tracked MVDR is slower than batch's single solve, it scores **−2.5 dB vs batch on
+~15/21 of these clips** (the 500-trial bootstrap, see `batch_mvdr_beamform`), and
+the spatial-coherence `mask` only applies to the *batch* beam, so the `mask=auto`
+default was a silent no-op under `tracked`. All fixes keep the Quality output
+intact (or better); a new Fast preset trades a little quality for ~25 % less
+runtime. Full suite **42 passing**.
+
+- **`beam` default `tracked` → `auto`** (`run_production`, `/api/clean`,
+  `index.html`). With `movement=rtf` (default) `auto` runs the cheaper, higher-SNR
+  **batch** RTF-MVDR on static clips and switches to tracked only on sustained
+  RTF drift — and it re-activates `mask=auto`. Faster, better, no regression.
+- **Skip wasted tracking.** `track_doa` (SRP-PHAT azimuth) is front/back ambiguous
+  on this UCA so it never steers the beam — it is now an **opt-in diagnostic**
+  (`doa_readout`, default off), running only when actually needed for the auto
+  decision. `rtf_drift` and the tracking-path conditioner run only when they can
+  change the beam (`beam=auto`); a **forced** beam skips all three.
+- **Report opt-in.** New `report` flag — `run_production` defaults it on (library
+  callers), but `/api/clean` defaults it **off** so the 200–700 ms matplotlib
+  render is opt-in. New **Generate report** UI checkbox; `report` URL is `null`
+  when skipped.
+- **Vectorized** the per-channel `sosfiltfilt` loops (`highpass`,
+  `condition_tracking_path` → one `axis=-1` call) and the per-frame RMS in
+  `calibrate_channels` / `mic_health_report` (block reshape + `nanmean` over the
+  active-percentile gate) — numerically identical, less Python overhead.
+- **DFN warmup at startup.** `pipeline.warm_up_models()` now also pre-loads the
+  production DFN model (`_get_dfn_model`) — DFN3 is the default NR, so the first
+  `/api/clean` no longer pays the `init_df()` model-load mid-request.
+- **Fast preset** (UI `prodPreset` dropdown: Quality / Fast / Custom; Quality
+  defaults unchanged): `nr=fast`, `beam=batch` (skips the movement detectors),
+  `mask=coherence`, `residual=0.45`, report off → **~2.66 s / 0.33× real-time**
+  vs ~3.55 s / 0.44× for Quality on `180_straight.wav`. Touching any knob → Custom.
+
+> **Next lever (noted, not yet done):** with DFN warm the dominant CPU cost is now
+> the beamform stage (~1.4–1.9 s; `mask=auto` doubles it by building two beams) and
+> `rtf_drift`'s separate 8-channel STFT. Caching the multichannel STFT is the next
+> optimization if more speed is needed.
+
+---
+
 ## 2026-06-05 (later) — Residual noise mop-up: kill the bed DFN3 leaves behind
 
 Users reported a quiet steady hiss/hum remaining *after* DeepFilterNet3. That is

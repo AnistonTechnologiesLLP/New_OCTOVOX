@@ -1372,23 +1372,16 @@ def bf_dfn2(x, fs):
 
 
 def warm_up_models():
-    """Pre-load Silero VAD at startup so the first request is fast.
-    Saves ~3 s of model-init time on the first user click.
+    """Pre-load the neural models at startup so the FIRST request is fast.
 
-    DeepFilterNet warmup is intentionally skipped — OCTOVOX-MAX is
-    disabled (see comment in process_file()), so loading the model
-    would just waste startup time and risk the CUDA/CPU mismatch
-    warning."""
-    # DFN warmup skipped — see process_file() OCTOVOX-MAX block.
-    # if HAS_DFN:
-    #     try:
-    #         t0 = time.time()
-    #         warm = np.zeros(48000 * 6, dtype=np.float32)
-    #         warm[::4000] = 1e-4
-    #         _ = deepfilternet_post(warm, 48000)
-    #         print(f"  pre-loaded DeepFilterNet (cpu·multi-threaded, {time.time()-t0:.1f}s)")
-    #     except Exception as e:
-    #         print(f"  ⚠ DFN warm-up skipped: {e}")
+    Loads Silero VAD (~3 s) and — now that DeepFilterNet3 is the DEFAULT
+    noise-reduction engine of the production pipeline (``prod_pipeline.
+    run_production`` ``nr="dfn"``) — the DFN model too. Without the DFN
+    pre-load the first ``/api/clean`` would pay the full ``init_df()``
+    model-load latency mid-request. This warms the SAME cache the production
+    path uses (``_get_dfn_model`` / ``_DFN_MODEL``), not the disabled
+    OCTOVOX-MAX ``deepfilternet_post`` path.
+    """
     if HAS_VAD:
         try:
             t0 = time.time()
@@ -1397,6 +1390,14 @@ def warm_up_models():
             print(f"  pre-loaded Silero VAD    ({dev}, {time.time()-t0:.1f}s)")
         except Exception:
             pass
+    if _DFN_AVAILABLE:
+        try:
+            t0 = time.time()
+            model, _ = _get_dfn_model()
+            if model is not None:
+                print(f"  pre-loaded DeepFilterNet3 ({_DFN_DEVICE}, {time.time()-t0:.1f}s)")
+        except Exception as e:
+            print(f"  ⚠ DFN warm-up skipped: {e}")
 
 
 # =============================================================================

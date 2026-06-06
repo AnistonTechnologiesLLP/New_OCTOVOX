@@ -200,6 +200,13 @@
         <div class="cstat"><div class="cstat-v" id="wsRtf">—</div><div class="cstat-l">× real-time</div></div>
       </div>
       <div class="cs-controls" id="prodControls">
+        <label class="ctl"><span class="ctl-lab">Preset</span>
+          <select id="prodPreset" class="inp">
+            <option value="quality" selected>Quality (DFN3, full)</option>
+            <option value="fast">Fast (low runtime)</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
         <label class="ctl"><span class="ctl-lab">Noise reduction</span>
           <select id="prodNr" class="inp">
             <option value="dfn" selected>Natural — DeepFilterNet3</option>
@@ -209,9 +216,9 @@
         </label>
         <label class="ctl"><span class="ctl-lab">Beam</span>
           <select id="prodBeam" class="inp">
-            <option value="auto">Auto (batch)</option>
+            <option value="auto" selected>Auto (batch, switches on movement)</option>
             <option value="batch">Batch</option>
-            <option value="tracked" selected>Tracked (moving)</option>
+            <option value="tracked">Tracked (moving)</option>
           </select>
         </label>
         <label class="ctl"><span class="ctl-lab">Movement</span>
@@ -251,6 +258,7 @@
         </label>
         <label class="ctl ctl-chk"><input type="checkbox" id="prodTrack" checked><span>Noise-robust tracking</span></label>
         <label class="ctl ctl-chk"><input type="checkbox" id="prodEq" checked><span>EQ</span></label>
+        <label class="ctl ctl-chk"><input type="checkbox" id="prodReport"><span>Generate report</span></label>
       </div>
       <div class="cs-actions">
         <button class="btn btn-primary" id="rerunProdBtn">↻ Re-run</button>

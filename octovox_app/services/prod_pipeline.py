@@ -90,18 +90,19 @@ def calibrate_channels(y, fs, max_gain_db=12.0, active_pct=70.0):
     D, n = y.shape
     if D == 1:
         return y, {"ran": False, "reason": "single channel"}
-    # Per-channel RMS over the active (loud) portion of each channel.
+    # Per-channel RMS over the active (loud) portion of each channel. Vectorized
+    # across channels AND frames (reshape into non-overlapping 30 ms blocks) — the
+    # same per-frame energies / active-percentile gate as the old double loop.
     win = int(0.030 * fs)
-    rms = np.zeros(D, dtype=np.float64)
-    for c in range(D):
-        x = y[c]
-        if win < n:
-            n_fr = 1 + (n - win) // win
-            e = np.array([np.mean(x[i*win:(i+1)*win] ** 2) + EPS for i in range(n_fr)])
-            thr = np.percentile(e, active_pct)
-            rms[c] = np.sqrt(np.mean(e[e >= thr]) + EPS)
-        else:
-            rms[c] = np.sqrt(np.mean(x ** 2) + EPS)
+    if win < n:
+        n_fr = 1 + (n - win) // win
+        frames = y[:, :n_fr * win].reshape(D, n_fr, win).astype(np.float64)
+        e = (frames ** 2).mean(axis=2) + EPS                  # (D, n_fr)
+        thr = np.percentile(e, active_pct, axis=1, keepdims=True)
+        active = np.where(e >= thr, e, np.nan)
+        rms = np.sqrt(np.nanmean(active, axis=1) + EPS)
+    else:
+        rms = np.sqrt(np.mean(y.astype(np.float64) ** 2, axis=1) + EPS)
     target = float(np.median(rms))
     g = target / np.maximum(rms, EPS)
     gmax = 10.0 ** (max_gain_db / 20.0)
@@ -141,20 +142,20 @@ def mic_health_report(y, fs, dead_db=-25.0, warn_db=3.0, fault_db=6.0,
         if D < 2:
             return {"ran": False, "reason": "single channel"}
         win = int(0.030 * fs)
-        rms = np.zeros(D, dtype=np.float64)
-        peak = np.zeros(D, dtype=np.float64)
-        clip_frac = np.zeros(D, dtype=np.float64)
-        for c in range(D):
-            x = y[c]
-            peak[c] = float(np.max(np.abs(x)) + EPS)
-            clip_frac[c] = float(np.mean(np.abs(x) >= clip_thresh) * 100.0)
-            if win < n:
-                n_fr = 1 + (n - win) // win
-                e = np.array([np.mean(x[i*win:(i+1)*win] ** 2) + EPS for i in range(n_fr)])
-                thr = np.percentile(e, active_pct)
-                rms[c] = np.sqrt(np.mean(e[e >= thr]) + EPS)
-            else:
-                rms[c] = np.sqrt(np.mean(x ** 2) + EPS)
+        # Per-channel peak / clip fraction / active-band RMS, vectorized across
+        # channels (and frames) — identical statistics to the old per-channel loop.
+        absy = np.abs(y)
+        peak = absy.max(axis=1) + EPS
+        clip_frac = (absy >= clip_thresh).mean(axis=1) * 100.0
+        if win < n:
+            n_fr = 1 + (n - win) // win
+            frames = y[:, :n_fr * win].reshape(D, n_fr, win).astype(np.float64)
+            e = (frames ** 2).mean(axis=2) + EPS                  # (D, n_fr)
+            thr = np.percentile(e, active_pct, axis=1, keepdims=True)
+            active = np.where(e >= thr, e, np.nan)
+            rms = np.sqrt(np.nanmean(active, axis=1) + EPS)
+        else:
+            rms = np.sqrt(np.mean(y.astype(np.float64) ** 2, axis=1) + EPS)
         ref = float(np.median(rms))
         per_mic, counts = [], {"OK": 0, "WARN": 0, "FAULT": 0, "DEAD": 0, "CLIP": 0}
         for c in range(D):
@@ -191,9 +192,9 @@ def highpass(y, fs, cutoff_hz=80.0, order=4):
     returns ``(y_hp, info)``. Falls back to the input on any filter error."""
     try:
         sos = sps.butter(order, cutoff_hz, btype="highpass", fs=fs, output="sos")
-        y_hp = np.empty_like(y)
-        for c in range(y.shape[0]):
-            y_hp[c] = sps.sosfiltfilt(sos, y[c]).astype(np.float32)
+        # One vectorized zero-phase pass over all channels (axis=-1) instead of a
+        # per-channel Python loop — same filter, same result, less overhead.
+        y_hp = sps.sosfiltfilt(sos, y, axis=-1).astype(np.float32)
         return y_hp, {"ran": True, "cutoff_hz": cutoff_hz, "order": order, "phase": "zero"}
     except Exception as e:
         return y, {"ran": False, "reason": f"error: {e}"}
@@ -251,9 +252,10 @@ def condition_tracking_path(y, fs, lo_hz=250.0, hi_hz=3500.0, order=4):
         if hi <= lo_hz:
             return y.copy(), {"ran": False, "reason": "band collapsed for this sr"}
         sos = sps.butter(order, [lo_hz, hi], btype="bandpass", fs=fs, output="sos")
-        y_track = np.empty_like(y)
-        for c in range(D):
-            y_track[c] = sps.sosfiltfilt(sos, y[c]).astype(np.float32)
+        # Single vectorized zero-phase band-pass across all channels — the SAME
+        # coefficients on every channel (axis=-1), so inter-channel phase is
+        # preserved exactly as the per-channel loop did, with less overhead.
+        y_track = sps.sosfiltfilt(sos, y, axis=-1).astype(np.float32)
         return y_track, {"ran": True, "band_hz": [lo_hz, round(hi, 1)], "order": order,
                          "phase": "zero (common filter — inter-channel phase preserved)"}
     except Exception as e:
@@ -1028,11 +1030,12 @@ def residual_suppress(x, fs, strength=0.6, noise_pct=10.0,
 #  MAIN ORCHESTRATOR
 # =========================================================================
 def run_production(input_path, out_dir, *, reference_path=None,
-                   nr="dfn", dfn_atten_lim_db=32.0, beam="tracked",
+                   nr="dfn", dfn_atten_lim_db=32.0, beam="auto",
                    mvdr_blend=0.6, wpe=False, eq=True,
                    agc="rms", aec="partitioned", movement="rtf",
                    track="conditioned", dereverb=None, mask="auto",
-                   residual=0.6, pause_floor_db=-40.0, log=None):
+                   residual=0.6, pause_floor_db=-40.0,
+                   doa_readout=False, report=True, log=None):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
     Parameters
@@ -1056,9 +1059,15 @@ def run_production(input_path, out_dir, *, reference_path=None,
         bed harder while staying natural. ``None`` uncaps it (most aggressive);
         lower values keep a quieter 2nd speaker. See clean_cascade.
     beam : "auto" | "batch" | "tracked"
-        Beamformer (stage [6]). ``auto`` uses the ``movement`` selector to pick
-        tracked when the talker moved, else the cheaper/better batch RTF-MVDR.
-        ``batch``/``tracked`` force the choice.
+        Beamformer (stage [6]). ``auto`` (DEFAULT) uses the ``movement`` selector
+        to switch to the tracked beam only on genuine sustained movement, else it
+        runs the cheaper *and* better batch RTF-MVDR (the 500-trial bootstrap
+        ranks batch above tracked on ~15/21 of these clips, 30.9 vs 28.4 dB
+        median-SNR). ``auto``+batch is also the ONLY path the spatial-coherence
+        ``mask`` applies to, so ``beam="auto"`` is faster, higher-SNR on most
+        recordings, and re-enables the ASA mask gain. ``batch``/``tracked`` force
+        the choice (and, when forced, the movement detectors are skipped — see
+        ``doa_readout``).
     movement : "srp" | "rtf"
         Which signal drives the ``beam="auto"`` batch-vs-tracked decision.
         ``srp`` (legacy) = SRP-PHAT azimuth spread — front/back ambiguous
@@ -1118,6 +1127,20 @@ def run_production(input_path, out_dir, *, reference_path=None,
         Silence floor for the automix gate (stage [9]). The DEFAULT ``-40.0``
         (deepened from -24) pushes the noise in speech *pauses* well down so
         gaps go near-silent; raise toward -24 for a softer, less gated feel.
+    doa_readout : bool
+        Whether to run the SRP-PHAT :func:`track_doa` azimuth READOUT (stage
+        [5]). It is a *diagnostic* — on this UCA the azimuth is front/back
+        ambiguous, so it never drives the beam decision (only the ambiguity-free
+        :func:`rtf_drift` does, and only in ``beam="auto"`` + ``movement="rtf"``).
+        The DEFAULT ``False`` therefore SKIPS it (and its multichannel STFT +
+        per-block covariance build) for speed; it still runs automatically when it
+        is actually needed for the auto decision (``movement="srp"``). Set ``True``
+        to populate the azimuth readout in the report.
+    report : bool
+        Whether to render the standalone HTML report + matplotlib figure (stage
+        [report]). The DEFAULT ``True`` keeps direct/library callers' behaviour;
+        the ``/api/clean`` endpoint defaults it OFF so the per-request matplotlib
+        render (200–700 ms) is opt-in. When ``False``, ``report_name`` is ``None``.
     log : callable | None  -- optional progress sink.
 
     Returns
@@ -1221,33 +1244,50 @@ def run_production(input_path, out_dir, *, reference_path=None,
     stages["vad"] = _stage("vad", _vad_detect)
     _log(f"prod: VAD speech ratio {stages['vad'].get('speech_ratio', '?')}")
 
-    # ── [5·track] tracking-path conditioning (Biamp-style audio/tracking split) ─
-    #  Build a noise-robust, speech-band COPY of the array for the trackers only;
-    #  the audio path (`y` → beamformer) is untouched. Phase-preserving so DOA/RTF
-    #  cues survive. ``track="audio"`` reuses the raw audio path (legacy behavior).
-    if track == "conditioned":
+    # ── [5·track / 5 / 5b]  TRACKING — only run the detectors that matter ─────
+    #  The beam decision is driven by EXACTLY ONE signal: rtf_drift, and only when
+    #  beam="auto" + movement="rtf" (SRP-PHAT azimuth is front/back ambiguous on
+    #  this UCA, so it never switches the beam — see the beam-select comment). So:
+    #    · rtf_drift   runs only when it can actually change the beam,
+    #    · track_doa   is a *diagnostic* azimuth readout — run only when explicitly
+    #                  requested (doa_readout) or when movement="srp"+auto selects it,
+    #    · the tracking-path conditioner (an 8-ch zero-phase band-pass) runs only
+    #      when one of those trackers will consume it.
+    #  When beam is FORCED (batch/tracked) and no readout is asked for, all three
+    #  are skipped — they were pure wasted compute on the forced paths.
+    need_movement = (beam == "auto")
+    run_rtf = need_movement and movement == "rtf"
+    run_doa = doa_readout or (need_movement and movement == "srp")
+    run_trackers = run_rtf or run_doa
+
+    if track == "conditioned" and run_trackers:
         y_track, tc_info = _stage("track_conditioning", lambda: condition_tracking_path(y, sr))
+    elif track == "conditioned":
+        y_track, tc_info = y, {"ran": False, "reason": "skipped (no tracker active for this beam)"}
     else:
         y_track, tc_info = y, {"ran": False, "reason": "disabled (tracking uses the audio path)"}
     stages["track_conditioning"] = tc_info
     _log(f"prod: tracking path {'conditioned ' + str(tc_info.get('band_hz')) if tc_info.get('ran') else 'raw (audio path)'}")
 
-    # ── [5] DOA / talker tracking (always run — supplies the azimuth readout) ─
-    doa_info, doa_moved = _stage("doa", lambda: track_doa(y_track, sr, ov.POLARIS_UCA_M))
+    # ── [5] DOA / talker tracking — azimuth readout (diagnostic only) ─
+    if run_doa:
+        doa_info, doa_moved = _stage("doa", lambda: track_doa(y_track, sr, ov.POLARIS_UCA_M))
+        _log(f"prod: DOA spread {doa_info.get('az_spread_deg', '?')}° → "
+             f"{'moving' if doa_moved else 'static'} talker")
+    else:
+        doa_info, doa_moved = {"ran": False,
+                               "reason": "skipped (diagnostic readout; not needed for this beam)"}, False
     stages["doa"] = doa_info
-    _log(f"prod: DOA spread {doa_info.get('az_spread_deg', '?')}° → "
-         f"{'moving' if doa_moved else 'static'} talker")
 
-    # ── [5b] movement selector — SRP-PHAT spread vs RTF drift ─────────
-    #  ``movement`` chooses WHICH signal decides batch-vs-tracked in "auto" mode.
-    #  "srp" keeps the legacy behavior; "rtf" uses the ambiguity-free RTF-drift
-    #  detector, whose median-of-steady-transitions reliably separates a
-    #  continuously moving talker from a static one on this array.
-    if movement == "rtf":
+    # ── [5b] movement selector — RTF drift (the only signal that switches) ─
+    if run_rtf:
         rtf_info, moved = _stage("rtf_drift", lambda: rtf_drift(y_track, sr))
         stages["rtf_drift"] = rtf_info
         _log(f"prod: RTF drift steady-median {rtf_info.get('steady_median', '?')} → "
              f"{'moving' if moved else 'static'} talker")
+    elif movement == "rtf":
+        stages["rtf_drift"] = {"ran": False, "reason": "skipped (beam forced; movement signal unused)"}
+        moved = doa_moved
     else:
         moved = doa_moved
 
@@ -1430,20 +1470,27 @@ def run_production(input_path, out_dir, *, reference_path=None,
     elapsed = round(time.time() - t0, 2)
     timings["TOTAL"] = round(elapsed * 1000.0, 1)
 
-    # ── standalone HTML report (never fails the clean run) ────────────
-    from . import prod_report
-    params_str = (f"NR:{nr} · beam:{beam} · move:{movement} · AGC:{agc} · "
-                  f"AEC:{aec}" + (" · track" if track == "conditioned" else "")
-                  + (f" · mask:{mask}" if mask != "snr" else "")
-                  + (f" · derev:{dereverb}" if dereverb != "none" else "")
-                  + (" · EQ" if eq else ""))
-    rep = _stage("report", lambda: prod_report.build_report(
-        out_dir, stem, input_path.name,
-        raw_mono=raw_downmix, clean_mono=mono, sr=sr,
-        stages=stages, timings=timings, elapsed_s=elapsed,
-        clean_path=clean_path, input_path=input_path_mono, params=params_str))
-    stages["report"] = rep
-    _log(f"prod: report {'written' if rep.get('ran') else 'skipped (' + str(rep.get('reason')) + ')'}")
+    # ── standalone HTML report (opt-in; never fails the clean run) ────
+    #  The matplotlib render is 200–700 ms of wall-clock the caller waits on, so
+    #  it is OFF by default on the API hot path. ``report=True`` re-enables it.
+    if report:
+        from . import prod_report
+        params_str = (f"NR:{nr} · beam:{beam} · move:{movement} · AGC:{agc} · "
+                      f"AEC:{aec}" + (" · track" if track == "conditioned" else "")
+                      + (f" · mask:{mask}" if mask != "snr" else "")
+                      + (f" · derev:{dereverb}" if dereverb != "none" else "")
+                      + (" · EQ" if eq else ""))
+        rep = _stage("report", lambda: prod_report.build_report(
+            out_dir, stem, input_path.name,
+            raw_mono=raw_downmix, clean_mono=mono, sr=sr,
+            stages=stages, timings=timings, elapsed_s=elapsed,
+            clean_path=clean_path, input_path=input_path_mono, params=params_str))
+        stages["report"] = rep
+        _log(f"prod: report {'written' if rep.get('ran') else 'skipped (' + str(rep.get('reason')) + ')'}")
+    else:
+        rep = {"ran": False, "reason": "report disabled (report=False)"}
+        stages["report"] = rep
+        _log("prod: report skipped (disabled)")
 
     return {
         "clean_path": str(clean_path),

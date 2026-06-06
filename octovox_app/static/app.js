@@ -1045,7 +1045,34 @@ async function clearAllOutput() {
 
 /* ═══════════════════ RESULTS (production) ═══════════════════ */
 
-/** Wire live readouts for the pipeline control knobs (e.g. Denoise strength). */
+/* Preset → knob values. "quality" = the full-quality defaults (unchanged
+ * output); "fast" = the low-runtime profile (no neural NR, single-beam coherent
+ * mask, lighter residual). "custom" leaves whatever the user set. */
+const PROD_PRESETS = {
+  // quality: full DFN3 + the never-worse "auto" mask (output unchanged).
+  // fast: no neural NR, single-beam coherent mask, and beam="batch" so the
+  // movement detectors (rtf_drift + tracking-path conditioning) are skipped
+  // entirely — a documented tradeoff (won't follow a fast-moving talker) for
+  // the lowest runtime (~0.33× real-time here vs ~0.44× for quality).
+  quality: { nr: "dfn",  beam: "auto",  mask: "auto",     residual: 0.6,  dereverb: "none" },
+  fast:    { nr: "fast", beam: "batch", mask: "coherent", residual: 0.45, dereverb: "none" },
+};
+
+/** Apply a named preset to the individual control elements (guarded — a missing
+ *  control is simply skipped). Does nothing for "custom". */
+function applyProdPreset(name) {
+  const p = PROD_PRESETS[name];
+  if (!p) return;
+  const set = (id, val) => { const el = $(id); if (el != null && val != null) el.value = String(val); };
+  set("prodNr", p.nr);
+  set("prodBeam", p.beam);
+  set("prodMask", p.mask);
+  set("prodDereverb", p.dereverb);
+  const r = $("prodResidual");
+  if (r && p.residual != null) { r.value = String(p.residual); r.dispatchEvent(new Event("input")); }
+}
+
+/** Wire live readouts + the preset selector for the pipeline control knobs. */
 function setupProdControls() {
   const r = $("prodResidual"), rv = $("prodResidualVal");
   if (r && rv) {
@@ -1056,6 +1083,18 @@ function setupProdControls() {
     };
     r.addEventListener("input", show);
     show();
+  }
+  // Preset dropdown drives the individual knobs; touching any knob flips the
+  // preset back to "custom" so the label never lies about the live settings.
+  const preset = $("prodPreset");
+  if (preset) {
+    preset.addEventListener("change", () => applyProdPreset(preset.value));
+    ["prodNr", "prodBeam", "prodMask", "prodDereverb", "prodResidual"].forEach(id => {
+      const el = $(id);
+      if (el) el.addEventListener("change", () => {
+        if (preset.value !== "custom") preset.value = "custom";
+      });
+    });
   }
 }
 
@@ -1072,6 +1111,7 @@ function getProdOpts() {
     dereverb: ($("prodDereverb") || {}).value || "none",
     residual: ($("prodResidual") ? parseFloat($("prodResidual").value) : 0.6),
     eq:    ($("prodEq") ? $("prodEq").checked : true),
+    report: ($("prodReport") ? $("prodReport").checked : false),
   };
 }
 
@@ -1133,7 +1173,10 @@ function renderProduction(j) {
   $("wsRtf").textContent = rtf ? `${rtf.toFixed(2)}×` : "—";
 
   $("downloadWinnerBtn").onclick = () => { window.location.href = j.clean; };
-  setReportButton(j.report || (j.stem ? `/output/${j.stem}/report.html` : null));
+  // Only enable the Report button when a report was actually rendered this run
+  // (it is opt-in now — the "Generate report" checkbox). No path-guessing, else
+  // the button would 404 on runs that skipped the matplotlib render.
+  setReportButton(j.report || null);
   const rerun = $("rerunProdBtn");
   if (rerun) rerun.onclick = () => runProduction(`${stem}.wav`);
   const pb = $("playoutBtn");
