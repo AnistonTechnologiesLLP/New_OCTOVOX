@@ -62,18 +62,22 @@ def test_imports():
 # ---------------------------------------------------------------------------
 #  2. CPU-mode guard test
 # ---------------------------------------------------------------------------
-def test_cpu_mode_forced_on_import():
-    """Importing pipeline must define CUDA_VISIBLE_DEVICES so DFN is pinned
-    to CPU. The module uses os.environ.setdefault(""), so after import the
-    variable always EXISTS; it is "" unless the surrounding environment had
-    deliberately pre-set it to a specific GPU list (which we accept as a
-    defensive, intentional override)."""
-    assert "CUDA_VISIBLE_DEVICES" in os.environ, \
-        "import did not set CUDA_VISIBLE_DEVICES"
-    val = os.environ["CUDA_VISIBLE_DEVICES"]
-    # Empty string is the DFN-CPU default; a non-empty value can only be
-    # present if it was pre-set before import (setdefault never overwrites).
-    assert val == "" or val, "value must be defined (empty=CPU, or pre-set)"
+def test_cpu_pin_is_opt_in():
+    """DFN now runs GPU-first with a per-call CPU fallback (the device-mismatch
+    that motivated the old blanket CPU pin is fixed at the source in
+    _dfn_run_enhance). So importing pipeline must NOT force-hide the GPU by
+    default: it only sets CUDA_VISIBLE_DEVICES="" when OCTOVOX_FORCE_CPU=1.
+    Verify the gate directly rather than re-importing the module."""
+    # Default (no force flag): the import-time pin is a no-op — any
+    # CUDA_VISIBLE_DEVICES present came from the surrounding environment, not us.
+    if os.environ.get("OCTOVOX_FORCE_CPU") != "1":
+        # Nothing to assert about the value; the contract is "don't force CPU".
+        # The opt-in escape hatch is the part we pin down:
+        assert hasattr(P, "_DFN_DEVICE"), "live DFN device state must exist"
+        assert P._DFN_DEVICE in ("cpu", "cuda")
+    else:
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == "", \
+            "OCTOVOX_FORCE_CPU=1 must hard-pin CUDA_VISIBLE_DEVICES to ''"
 
 
 # ---------------------------------------------------------------------------

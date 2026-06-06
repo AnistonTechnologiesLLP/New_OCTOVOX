@@ -40,16 +40,19 @@ Speed (the "very less time taken" requirement):
   · every stage records its wall-clock into ``timings`` so the budget is
     measurable, and a skipped stage is surfaced in ``stages`` — never silent.
 
-Neural-stack CPU pin: like ``clean_cascade.py`` / ``pipeline.py`` we hide
-every GPU from torch at the ENVIRONMENT level before torch is imported, to
-dodge DeepFilterNet's CUDA-synthesis tensor-mismatch bug on CUDA hosts.
+Neural-stack device policy: DFN runs GPU-first with a per-call CPU fallback,
+keeping model + input features on one device (see ``pipeline._dfn_run_enhance``)
+— the fix for the old ``cuda.FloatTensor`` vs ``FloatTensor`` mismatch, which
+was a device-placement bug, not a DFN-CUDA-synthesis bug. Set OCTOVOX_FORCE_CPU=1
+to restore the old hard CPU pin.
 =========================================================================
 """
 import os
 
-# ── Pin the torch stack (DeepFilterNet + Silero VAD) to CPU before torch is
-#    imported anywhere. Must be at module top (opt-out via a pre-set var). ──
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+# ── Opt-in CPU pin (OCTOVOX_FORCE_CPU=1): hide the GPU from torch before it is
+#    imported anywhere. Off by default — the torch stack runs GPU-first now. ──
+if os.environ.get("OCTOVOX_FORCE_CPU") == "1":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 import time
 from collections import OrderedDict

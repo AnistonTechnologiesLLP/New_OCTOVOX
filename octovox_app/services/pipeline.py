@@ -111,25 +111,31 @@ def _asnumpy(a):
 #  CPU. This is placed AFTER the CuPy block above on purpose: CuPy has
 #  already initialised, so the GPU DSP acceleration is untouched.
 #
-#  setdefault() makes it an opt-OUT: a caller who deliberately pre-sets
-#  CUDA_VISIBLE_DEVICES (e.g. "0") before import keeps torch on the GPU
-#  and accepts DFN's CUDA risk. The Sprint C tests assert only that the
-#  variable is defined after import (the real DFN CPU-pin is the
-#  get_device() patch in _get_dfn_model / deepfilternet_post).
+#  GPU-first by default: DFN now runs on CUDA when available and keeps its
+#  model + input features on the SAME device (see _dfn_run_enhance), with a
+#  per-call CPU fallback. The old blanket GPU-hide (and the get_device()
+#  monkeypatch it backed) is therefore retired — it silently failed in df
+#  0.5.6 anyway. Set OCTOVOX_FORCE_CPU=1 to restore the hard CPU pin as an
+#  escape hatch (must be before the torch import below to take effect).
 # ─────────────────────────────────────────────────────────────────────
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+if os.environ.get("OCTOVOX_FORCE_CPU") == "1":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 # ─────────────────────────────────────────────────────────────────────
-#  PERFORMANCE: GPU detection (CUDA torch → Silero VAD on GPU, unless the
-#  neural-stack CPU pin above hid the devices — then this stays CPU).
+#  PERFORMANCE: GPU detection (CUDA torch → Silero VAD + DFN on GPU).
+#  OCTOVOX_FORCE_CPU=1 forces HAS_CUDA False deterministically — we gate on
+#  the flag here rather than trusting CUDA_VISIBLE_DEVICES="" to hide the
+#  GPU, because CuPy (imported above) has already created a CUDA context, so
+#  torch keeps seeing the device regardless of the env var.
 # ─────────────────────────────────────────────────────────────────────
 DEVICE = "cpu"
 HAS_CUDA = False
 GPU_NAME = None
 GPU_MEM_GB = 0.0
+_FORCE_CPU = os.environ.get("OCTOVOX_FORCE_CPU") == "1"
 try:
     import torch as _torch_probe                          # type: ignore
-    if _torch_probe.cuda.is_available():
+    if not _FORCE_CPU and _torch_probe.cuda.is_available():
         HAS_CUDA = True
         DEVICE = "cuda"
         GPU_NAME = _torch_probe.cuda.get_device_name(0)
@@ -157,6 +163,13 @@ except Exception as _dfn_err:
 _DFN_MODEL = None               # cached DFN model (None until first load)
 _DFN_DF_STATE = None            # cached DFState companion object
 _DFN_LOAD_FAILED = False        # set once if init_df() raises, to stop retrying
+# Live device for DFN enhance. GPU-first when CUDA is present; a single CUDA
+# failure latches this to "cpu" for the rest of the process so we don't pay the
+# failed-GPU-call cost on every chunk. Steered through df's own config knob (see
+# _dfn_set_device) — NOT the old get_device monkeypatch, which silently failed
+# to reach init_df()/enhance() in df 0.5.6 and let CUDA features collide with a
+# CPU model.
+_DFN_DEVICE = "cpu"             # set to "cuda" at first load if HAS_CUDA
 
 # Optional: nara_wpe for SOTA dereverberation preprocessing
 HAS_WPE = False
@@ -1154,21 +1167,10 @@ def deepfilternet_post(x, fs):
     if not HAS_DFN:
         return x
 
-    # --- lazy init: pin DFN to CPU before init_df() touches anything --
+    # --- lazy init: load the model and pick its device ----------------
     if _DFN_STATE["model"] is None:
+        global _DFN_DEVICE
         try:
-            # Patch get_device() in every df.* module that has bound it
-            # at import time. Done ONCE per process, persists across all
-            # later enhance() calls.
-            try:
-                import df.utils, df.modules, df.enhance
-                _cpu_dev = (lambda: __import__("torch").device("cpu"))
-                df.utils.get_device   = _cpu_dev
-                df.modules.get_device = _cpu_dev
-                df.enhance.get_device = _cpu_dev
-            except Exception as _patch_err:
-                print(f"  [info] DFN get_device patch skipped: {_patch_err}")
-
             # Redirect OS-level stderr (fd 2) to devnull so the git
             # subprocess that DFN spawns can't print
             # "fatal: not a git repository".
@@ -1184,27 +1186,96 @@ def deepfilternet_post(x, fs):
                 os.close(_devnull_fd)
                 os.close(_saved_fd)
 
-            # Belt-and-suspenders: explicit .cpu() on the model
-            model = model.cpu()
+            # GPU-first placement, steered through df's config knob so input
+            # features track the model (see _dfn_set_device / _dfn_run_enhance);
+            # _dfn_run_enhance demotes to CPU on the first CUDA failure.
+            _DFN_DEVICE = "cuda" if HAS_CUDA else "cpu"
+            if _DFN_DEVICE == "cuda":
+                try:
+                    _dfn_set_device("cuda:0")
+                    model = model.to("cuda")
+                except Exception as e:
+                    print(f"[WARN] DFN GPU placement failed ({e}); using CPU")
+                    _DFN_DEVICE = "cpu"
+            if _DFN_DEVICE == "cpu":
+                _dfn_set_device("cpu")
+                model = model.cpu()
+
             _DFN_STATE["model"] = model
             _DFN_STATE["df_state"] = df_state
-            _DFN_STATE["device"] = "cpu"
+            _DFN_STATE["device"] = _DFN_DEVICE
         except Exception as e:
             print(f"[WARN] DeepFilterNet init failed: {e}")
             return x
 
-    # --- enhance on CPU -----------------------------------------------
+    # --- enhance (GPU-first, CPU fallback) ----------------------------
     try:
         import torch
         if fs != _DFN_STATE["df_state"].sr():
             return x   # silently skip if sample-rate mismatch
         audio = torch.from_numpy(x.astype(np.float32))[None, :]
-        with torch.no_grad():
-            out = enhance(_DFN_STATE["model"], _DFN_STATE["df_state"], audio)
+        out = _dfn_run_enhance(_DFN_STATE["model"], _DFN_STATE["df_state"], audio)
+        _DFN_STATE["device"] = _DFN_DEVICE   # reflect any GPU→CPU demotion
         return out.detach().cpu().numpy().squeeze().astype(np.float32)
     except Exception as e:
         print(f"[WARN] DeepFilterNet enhance failed: {e}")
         return x
+
+
+# =============================================================================
+#  DFN device control — robust replacement for the get_device() monkeypatch
+# =============================================================================
+def _dfn_set_device(dev):
+    """Steer DeepFilterNet's internal device to ``dev`` ("cpu" or "cuda:0").
+
+    df 0.5.6's ``get_device()`` (df.utils) reads ``config('DEVICE', section=
+    'train')`` on *every* call, so setting that one config value redirects every
+    internal reference — input features (enhance.py ``df_features(..., device=
+    get_device())``), the GRU h0 reset, and the ERB filterbank — to the same
+    device the model is on. This is why we use it instead of reassigning
+    ``df.{utils,modules,enhance}.get_device``: that monkeypatch does not reach
+    the reference ``init_df``/``enhance`` actually bind in this build (it still
+    logged "Running on device cuda:0"), leaving CUDA features to collide with a
+    CPU model. Best-effort: returns False if df's config isn't importable."""
+    try:
+        from df.config import config
+        config.set("DEVICE", str(dev), str, section="train")
+        return True
+    except Exception:
+        return False
+
+
+def _dfn_run_enhance(model, df_state, audio, atten_lim_db=None):
+    """Run ``df.enhance.enhance`` GPU-first with a one-way CPU fallback.
+
+    Keeps ``model`` and df's internal device (via :func:`_dfn_set_device`) in
+    lock-step, so input features never land on a different device than the
+    weights. On a CUDA ``RuntimeError`` (OOM, mismatch, driver hiccup) we latch
+    :data:`_DFN_DEVICE` to "cpu" for the rest of the process and retry on CPU,
+    so one GPU failure can't silently no-op every remaining chunk. Returns the
+    enhanced tensor (always on CPU, as df synthesises through numpy)."""
+    global _DFN_DEVICE
+    import torch
+    from df.enhance import enhance
+    if _DFN_DEVICE == "cuda":
+        try:
+            _dfn_set_device("cuda:0")
+            model = model.to("cuda")
+            with torch.no_grad():
+                return enhance(model, df_state, audio, atten_lim_db=atten_lim_db)
+        except RuntimeError as e:
+            print(f"[WARN] DFN CUDA enhance failed ({e}); pinning DFN to CPU "
+                  f"for the rest of this run")
+            _DFN_DEVICE = "cpu"
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+    # CPU path (either CUDA absent, or a prior CUDA failure latched us here).
+    _dfn_set_device("cpu")
+    model = model.to("cpu")
+    with torch.no_grad():
+        return enhance(model, df_state, audio, atten_lim_db=atten_lim_db)
 
 
 # =============================================================================
@@ -1218,30 +1289,20 @@ def deepfilternet_post(x, fs):
 #  0.5.6, which bundles the DFN2/DFN3 weights and exposes init_df()/enhance().
 # =============================================================================
 def _get_dfn_model():
-    """Lazily load and cache the DeepFilterNet model, pinned to CPU.
+    """Lazily load and cache the DeepFilterNet model.
 
     Returns ``(model, df_state)``, or ``(None, None)`` when DeepFilterNet is
-    not installed or a previous load attempt failed. The CPU-pinning mirrors
-    :func:`deepfilternet_post` (DFN 0.5.6's CUDA synthesis path is buggy):
-    patch ``get_device()`` in every ``df.*`` module to return ``cpu`` and call
-    ``.cpu()`` on the model, so DFN never touches CUDA."""
-    global _DFN_MODEL, _DFN_DF_STATE, _DFN_LOAD_FAILED
+    not installed or a previous load attempt failed. Loads GPU-first when CUDA
+    is present (:data:`_DFN_DEVICE`) with a one-way CPU fallback handled per
+    enhance call by :func:`_dfn_run_enhance`; device steering goes through df's
+    own config knob (:func:`_dfn_set_device`), not the old get_device monkey-
+    patch, which silently failed to take in df 0.5.6."""
+    global _DFN_MODEL, _DFN_DF_STATE, _DFN_LOAD_FAILED, _DFN_DEVICE
     if not _DFN_AVAILABLE or _DFN_LOAD_FAILED:
         return None, None
     if _DFN_MODEL is not None:
         return _DFN_MODEL, _DFN_DF_STATE
     try:
-        # Force CPU inside the library (see deepfilternet_post for the full
-        # rationale). Best-effort: if df's internals change, fall through.
-        try:
-            import df.utils, df.modules, df.enhance        # type: ignore
-            _cpu_dev = (lambda: __import__("torch").device("cpu"))
-            df.utils.get_device   = _cpu_dev
-            df.modules.get_device = _cpu_dev
-            df.enhance.get_device = _cpu_dev
-        except Exception:
-            pass
-
         # Suppress DFN's "fatal: not a git repository" subprocess noise at the
         # OS file-descriptor level (Python-level stderr redirection misses it).
         sys.stderr.flush()
@@ -1256,7 +1317,22 @@ def _get_dfn_model():
             os.close(_devnull_fd)
             os.close(_saved_fd)
 
-        _DFN_MODEL = model.cpu()
+        # GPU-first: place the model on CUDA when available and steer df's
+        # internal device to match so input features land on the same device.
+        # _dfn_run_enhance demotes to CPU on the first CUDA RuntimeError.
+        _DFN_DEVICE = "cuda" if HAS_CUDA else "cpu"
+        if _DFN_DEVICE == "cuda":
+            try:
+                _dfn_set_device("cuda:0")
+                model = model.to("cuda")
+            except Exception as e:
+                print(f"[WARN] DFN GPU placement failed ({e}); using CPU")
+                _DFN_DEVICE = "cpu"
+        if _DFN_DEVICE == "cpu":
+            _dfn_set_device("cpu")
+            model = model.cpu()
+
+        _DFN_MODEL = model
         _DFN_DF_STATE = df_state
         return _DFN_MODEL, _DFN_DF_STATE
     except Exception as e:
@@ -1288,8 +1364,7 @@ def bf_dfn2(x, fs):
         if fs != df_state.sr():
             return None
         audio = torch.from_numpy(np.asarray(x, dtype=np.float32))[None, :]
-        with torch.no_grad():
-            out = enhance(model, df_state, audio)
+        out = _dfn_run_enhance(model, df_state, audio)
         return out.detach().cpu().numpy().squeeze().astype(np.float32)
     except Exception as e:
         print(f"[WARN] DeepFilterNet2 enhance failed: {e}")
@@ -2337,7 +2412,7 @@ def process_file(wav_path, out_root, manual_gain_db=None, geometry=None,
             "cuda_available"   : HAS_CUDA,
             "gpu_name"         : GPU_NAME,
             "gpu_mem_gb"       : round(GPU_MEM_GB, 1),
-            "dfn_device"       : _DFN_STATE.get("device", "cpu"),
+            "dfn_device"       : _DFN_DEVICE,
             "vad_device"       : "cuda" if HAS_CUDA else "cpu",
         },
     }
