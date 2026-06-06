@@ -539,26 +539,26 @@ def clean_voice():
     Speed-first knobs (all optional):
       · ``nr``   : "fast" (Wiener, default, no neural cost) | "dfn" (DeepFilterNet3,
                    best quality but the slow stage) | "none".
-      · ``beam`` : "auto" (default — tracked if the talker moved, else batch) |
-                   "batch" | "tracked".
+      · ``beam`` : "tracked" (default — moving-talker beam) | "auto" (tracked if
+                   the talker moved, else batch) | "batch".
       · ``dereverb`` : "none" (default) | "spectral" (fast single-channel late-
                    reverb suppressor on the mono beam, ~0.02× RT) | "wpe"
                    (multichannel front-end, ~3× RT, the quality pass).
       · ``wpe``  : legacy bool — ``true`` ≡ ``dereverb="wpe"`` (kept for back-compat).
       · ``eq``   : apply the speech EQ (default true).
-      · ``agc``  : "perceptual" (default — K-weighted attack/release loudness) |
-                   "rms" (instantaneous RMS to target).
+      · ``agc``  : "rms" (default — instantaneous RMS to target) | "perceptual"
+                   (K-weighted attack/release loudness).
       · ``aec``  : "partitioned" (default — multi-tap, long echo tail) | "single"
                    (one-tap NLMS). Only active with a ``reference`` WAV.
-      · ``movement`` : "srp" (default — SRP-PHAT azimuth, readout only) | "rtf"
-                   (RTF-drift; in beam="auto" it switches to the tracked beam on
-                   sustained movement).
+      · ``movement`` : "rtf" (default — RTF-drift; in beam="auto" it switches to
+                   the tracked beam on sustained movement) | "srp" (SRP-PHAT
+                   azimuth, readout only).
       · ``track`` : "conditioned" (default — noise-robust speech-band tracking
                    path so HVAC/projector noise can't steer the beam) | "audio"
                    (track on the raw audio path).
-      · ``mask``  : "snr" (default) | "coherent" (fuse the spatial-coherence/ASA
-                   cue into the MVDR mask) | "auto" (build both, keep the better —
-                   never worse than baseline). Affects the batch beam only.
+      · ``mask``  : "auto" (default — build both, keep the better, never worse than
+                   baseline) | "coherent" (fuse the spatial-coherence/ASA cue into
+                   the MVDR mask) | "snr". Affects the batch beam only.
       · ``mvdr_blend`` (0..1, keeps off-axis speakers), ``dfn_atten_lim_db``,
         and ``reference`` (filename of an optional far-end ref WAV for AEC).
     """
@@ -573,9 +573,9 @@ def clean_voice():
     nr = str(data.get("nr", "dfn")).lower()
     if nr not in ("fast", "dfn", "none"):
         nr = "dfn"
-    beam = str(data.get("beam", "auto")).lower()
+    beam = str(data.get("beam", "tracked")).lower()
     if beam not in ("auto", "batch", "tracked"):
-        beam = "auto"
+        beam = "tracked"
     wpe = bool(data.get("wpe", False))   # legacy flag — superseded by `dereverb`
     dereverb = data.get("dereverb")      # "none" | "spectral" | "wpe" (None → derive from wpe)
     if dereverb is not None:
@@ -583,21 +583,21 @@ def clean_voice():
         if dereverb not in ("none", "spectral", "wpe"):
             dereverb = "none"
     eq = bool(data.get("eq", True))
-    agc = str(data.get("agc", "perceptual")).lower()
+    agc = str(data.get("agc", "rms")).lower()
     if agc not in ("perceptual", "rms"):
-        agc = "perceptual"
+        agc = "rms"
     aec = str(data.get("aec", "partitioned")).lower()
     if aec not in ("partitioned", "single"):
         aec = "partitioned"
-    movement = str(data.get("movement", "srp")).lower()
+    movement = str(data.get("movement", "rtf")).lower()
     if movement not in ("srp", "rtf"):
-        movement = "srp"
+        movement = "rtf"
     track = str(data.get("track", "conditioned")).lower()
     if track not in ("conditioned", "audio"):
         track = "conditioned"
-    mask = str(data.get("mask", "snr")).lower()
+    mask = str(data.get("mask", "auto")).lower()
     if mask not in ("snr", "coherent", "auto"):
-        mask = "snr"
+        mask = "auto"
     try:
         mvdr_blend = max(0.0, min(1.0, float(data.get("mvdr_blend", 0.6))))
     except (TypeError, ValueError):

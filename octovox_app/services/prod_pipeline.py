@@ -1025,10 +1025,10 @@ def residual_suppress(x, fs, strength=0.6, noise_pct=10.0,
 #  MAIN ORCHESTRATOR
 # =========================================================================
 def run_production(input_path, out_dir, *, reference_path=None,
-                   nr="dfn", dfn_atten_lim_db=32.0, beam="auto",
+                   nr="dfn", dfn_atten_lim_db=32.0, beam="tracked",
                    mvdr_blend=0.6, wpe=False, eq=True,
-                   agc="perceptual", aec="partitioned", movement="srp",
-                   track="conditioned", dereverb=None, mask="snr",
+                   agc="rms", aec="partitioned", movement="rtf",
+                   track="conditioned", dereverb=None, mask="auto",
                    residual=0.6, pause_floor_db=-40.0, log=None):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
@@ -1058,9 +1058,9 @@ def run_production(input_path, out_dir, *, reference_path=None,
         ``batch``/``tracked`` force the choice.
     movement : "srp" | "rtf"
         Which signal drives the ``beam="auto"`` batch-vs-tracked decision.
-        ``srp`` (DEFAULT, legacy) = SRP-PHAT azimuth spread — front/back ambiguous
+        ``srp`` (legacy) = SRP-PHAT azimuth spread — front/back ambiguous
         on this UCA, so its movement flag is reported but NOT acted on (auto stays
-        on batch). ``rtf`` = :func:`rtf_drift`, an ambiguity-free RTF-drift
+        on batch). ``rtf`` (DEFAULT) = :func:`rtf_drift`, an ambiguity-free RTF-drift
         detector that auto WILL act on (switch to tracked) when it reports
         sustained movement. SRP-PHAT still runs for the azimuth readout either way.
     track : "conditioned" | "audio"
@@ -1072,13 +1072,14 @@ def run_production(input_path, out_dir, *, reference_path=None,
         on the raw audio path (legacy). NOT a latency feature.
     mask : "snr" | "coherent" | "auto"
         Speech/noise mask for the BATCH RTF-MVDR covariance build (stage [6]).
-        ``snr`` (DEFAULT) = the instrument's energy soft-mask. ``coherent`` fuses
+        ``snr`` = the instrument's energy soft-mask. ``coherent`` fuses
         the spatial-coherence (ASA "common location") cue so diffuse reverb/noise
         is pushed into the noise covariance — large SNR gains on multi-talker /
         moving / reverberant clips (+4 to +12 dB) but a mild regression on
-        already-clean single-talker ones. ``auto`` builds both beams and keeps the
-        one an independent proxy prefers — "never worse than baseline" (keeps the
-        ~+1.8 dB mean gain, worst case only −0.5 dB). Only affects the batch beam.
+        already-clean single-talker ones. ``auto`` (DEFAULT) builds both beams and
+        keeps the one an independent proxy prefers — "never worse than baseline"
+        (keeps the ~+1.8 dB mean gain, worst case only −0.5 dB). Only affects the
+        batch beam.
     mvdr_blend : float in [0,1]
         MVDR↔downmix blend so off-axis speakers survive (see clean_cascade).
     dereverb : "none" | "spectral" | "wpe" | None
@@ -1095,10 +1096,10 @@ def run_production(input_path, out_dir, *, reference_path=None,
         ``dereverb="wpe"`` when ``dereverb`` is not given.
     eq  : bool   -- apply the speech EQ (stage [10]).
     agc : "perceptual" | "rms"
-        Loudness control (stage [10]). ``perceptual`` (DEFAULT) =
+        Loudness control (stage [10]). ``perceptual`` =
         :func:`perceptual_agc` — K-weighted attack/release loudness riding, more
-        natural on speech with dynamics. ``rms`` = the instrument's instantaneous
-        :func:`pipeline.agc_to_dbfs`.
+        natural on speech with dynamics. ``rms`` (DEFAULT) = the instrument's
+        instantaneous :func:`pipeline.agc_to_dbfs`.
     aec : "partitioned" | "single"
         Echo canceller (stage [7], only active with a far-end ``reference_path``).
         ``partitioned`` (DEFAULT) = :func:`aec_partitioned` (multi-tap, long echo
