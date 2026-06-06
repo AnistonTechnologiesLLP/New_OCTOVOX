@@ -42,20 +42,20 @@ records exactly which stages fired, so a skip is visible — not silent.
 ──────────────────────────────────────────────────────────────────────────
   NEURAL-STACK CPU PIN (handoff §6)
 ──────────────────────────────────────────────────────────────────────────
-DeepFilterNet's CUDA synthesis path is buggy on CUDA-equipped Windows hosts
-(``cuda.FloatTensor`` vs ``FloatTensor`` mismatch). That bug is package /
-torch-device related, NOT version-specific — DFN3 does not fix it — so we
-keep the same structural mitigation as ``pipeline.py`` / ``pilot_dfn2.py``:
-hide every GPU from torch at the ENVIRONMENT level *before* torch is ever
-imported. ``setdefault`` makes it an opt-OUT (a caller who pre-sets
-CUDA_VISIBLE_DEVICES keeps torch on the GPU and accepts the risk).
+The historical ``cuda.FloatTensor`` vs ``FloatTensor`` mismatch was NOT a real
+DFN-CUDA-synthesis bug — it was a device-placement mismatch: the old code put
+the model on CPU but let DFN's get_device() push the input features to CUDA.
+That is now fixed at the source in ``pipeline._dfn_run_enhance`` (model and
+features share one device, GPU-first with a CPU fallback), so DFN runs on the
+GPU by default. Set OCTOVOX_FORCE_CPU=1 to restore the old hard CPU pin.
 =========================================================================
 """
 import os
 
-# ── Belt #1: pin the whole torch stack (DeepFilterNet AND Silero VAD) to
-#    CPU before torch is imported anywhere. Must be at module top. ──
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+# ── Opt-in CPU pin (OCTOVOX_FORCE_CPU=1): hide every GPU from torch before it
+#    is imported anywhere. Off by default — DFN/VAD run GPU-first now. ──
+if os.environ.get("OCTOVOX_FORCE_CPU") == "1":
+    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 import time
 from pathlib import Path
@@ -396,12 +396,13 @@ def _dfn_enhance(mono, sr, atten_lim_db=12.0):
         return None
     try:
         import torch
-        from df.enhance import enhance
         if sr != df_state.sr():
             return None
         audio = torch.from_numpy(np.ascontiguousarray(mono, dtype=np.float32))[None, :]
-        with torch.no_grad():
-            out = enhance(model, df_state, audio, atten_lim_db=atten_lim_db)
+        # Shared GPU-first / CPU-fallback runner keeps model + input features on
+        # the same device (the old direct enhance() call let CUDA features hit a
+        # CPU model). atten_lim_db is forwarded unchanged (None = unlimited).
+        out = ov._dfn_run_enhance(model, df_state, audio, atten_lim_db=atten_lim_db)
         return out.detach().cpu().numpy().squeeze().astype(np.float32)
     except Exception as e:
         print(f"[WARN] clean_cascade DFN enhance failed: {e}")
