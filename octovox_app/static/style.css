@@ -311,7 +311,24 @@ select.inp {
 .sc-bar { width: 32px; height: 3px; background: var(--line-2); border-radius: 2px; overflow: hidden; }
 .sc-fill { display: block; height: 100%; background: var(--teal-dim); border-radius: 2px; }
 .speaker-chip.active .sc-fill { background: var(--teal); }
-.az-radar { display: block; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); margin-top: 6px; width: 100%; max-width: 256px; }
+.az-radar { display: block; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); margin-top: 6px; width: 100%; max-width: 240px; cursor: crosshair; transition: border-color .15s; }
+.az-radar:hover { border-color: var(--teal-dim); }
+.target-readout { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 5px; }
+.target-readout.armed { color: var(--teal); }
+
+/* ── value labels + range inputs (shared by residual + advanced knobs) ── */
+.ctl-val { font-family: var(--mono); font-weight: 600; color: var(--teal); font-size: 11px; }
+.inp-range { width: 100%; accent-color: var(--teal); cursor: pointer; padding: 0; }
+
+/* ── Advanced (collapsible) knob group ── */
+.ctl-advanced { gap: 12px; border: 1px solid var(--line); border-radius: 9px; padding: 0; background: var(--bg); }
+.ctl-advanced > summary { cursor: pointer; list-style: none; padding: 9px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); user-select: none; }
+.ctl-advanced > summary::-webkit-details-marker { display: none; }
+.ctl-advanced > summary::before { content: "▸ "; color: var(--teal-dim); }
+.ctl-advanced[open] > summary::before { content: "▾ "; }
+.ctl-advanced[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.ctl-advanced > .ctl { padding: 0 12px; }
+.ctl-advanced > .ctl:last-child { padding-bottom: 12px; }
 
 .console-transport { padding: 22px; display: flex; flex-direction: column; gap: 14px; justify-content: center; }
 .track { background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; display: grid; grid-template-columns: 1fr 44px; grid-template-rows: auto auto; gap: 10px 14px; align-items: center; }

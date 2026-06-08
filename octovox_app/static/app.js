@@ -9,16 +9,6 @@ const qsa = sel => Array.from(document.querySelectorAll(sel));
 const REQUIRED_CH = 8;
 const REQUIRED_SR = 48000;
 
-const ALGO_INFO = {
-  "Single mic": { formula: "y = x[ref]", desc: "Best single microphone, picked automatically. Baseline." },
-  "RTF-MVDR":   { formula: "w = (Φ_v⁻¹ · h) / (hᴴ · Φ_v⁻¹ · h)", desc: "MVDR. Sharp directional pickup; preserves voice timbre." },
-  "RTF-GEV+BAN":{ formula: "w = max-eig(Φ_v⁻¹ · Φ_x), BAN normalised", desc: "Generalized eigenvalue beamformer. Maximises analytical SNR." },
-  "MWF":        { formula: "w = (Φ_x + Φ_v)⁻¹ · Φ_x · e[ref]", desc: "Multichannel Wiener Filter. MSE-optimal noise/distortion balance." },
-  "SDW-MWF (μ=2)": { formula: "w = (Φ_x + μ·Φ_v)⁻¹ · Φ_x · e[ref]", desc: "Tunable MWF (μ=2 = noise reduction matters twice as much)." },
-  "MaxSNR+Wiener": { formula: "w = max-eigvec(Φ_v⁻¹ · Φ_x) + Wiener", desc: "Classic CHiME-winning combo. Chases SNR aggressively." },
-  "Neural-MVDR-WPE": { formula: "y = MVDR{ WPE(x), Φ_x(VAD), Φ_v(VAD) }", desc: "★ SOTA. WPE dereverb + Silero VAD + MVDR. CHiME-challenge front-end." },
-};
-
 const STAGE_KEYWORDS = {
   load:   ["Loaded"],
   stft:   ["STFT"],
@@ -35,7 +25,6 @@ const state = {
   currentMetrics: null,
   wsInput: null,
   wsWinner: null,
-  bpFreq: "mid",
   recording: false,
   selectedFile: null,       // last file selected for processing / detect
   targetAz: null,           // speaker azimuth to extract (null = all voices)
@@ -115,14 +104,12 @@ window.addEventListener("unhandledrejection", e => {
 
 window.addEventListener("DOMContentLoaded", () => {
   setupHeroTypewriter();
-  setupMicTilt();
   setupNavSpy();
   setupTabs();
   setupDropzone();
   setupSamplePanel();
   setupRecordPanel();
   setupFilesPanel();
-  setupVerdictRefresh();
   setupProdControls();
   loadDevices();
   loadOutputDevices();
@@ -162,27 +149,6 @@ function setupHeroTypewriter() {
     tag.addEventListener("mouseleave", () => paused = false);
   }
   tick();
-}
-
-function setupMicTilt() {
-  const frame = $("micFrame");
-  if (!frame) return;
-  const parent = qs(".mic-orbit");
-  let raf = null;
-  parent.addEventListener("mousemove", (e) => {
-    const r = frame.getBoundingClientRect();
-    const dx = (e.clientX - (r.left + r.width / 2)) / r.width;
-    const dy = (e.clientY - (r.top + r.height / 2)) / r.height;
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => {
-      frame.style.transform =
-        `perspective(900px) rotateX(${(-dy*12).toFixed(2)}deg) rotateY(${(dx*12).toFixed(2)}deg) scale(1.02)`;
-    });
-  });
-  parent.addEventListener("mouseleave", () => {
-    if (raf) cancelAnimationFrame(raf);
-    frame.style.transform = "perspective(900px) rotateX(0) rotateY(0) scale(1)";
-  });
 }
 
 
@@ -745,6 +711,7 @@ async function refreshFiles() {
     const wMap = {};
     (vJ.recordings || []).forEach(r => wMap[r.stem] = r);
     renderFilesList(filesJ.files || [], wMap);
+    populateReferencePicker(filesJ.files || []);   // keep AEC ref picker in sync
   } catch (err) { console.warn("refreshFiles failed:", err); }
 }
 
@@ -1086,8 +1053,7 @@ async function detectSpeakers(filename) {
     if (!j.ok) throw new Error(j.error || "speaker detect failed");
     state.detectedSpeakers = j.speakers || [];
     state.speakersFile = filename;
-    renderSpeakerChips(state.detectedSpeakers);
-    drawAzRadar(state.detectedSpeakers, state.targetAz);
+    renderSpeakerChips(state.detectedSpeakers);   // also redraws the radar
     const n = state.detectedSpeakers.length;
     toast(n > 0
       ? `Found ${n} talker direction${n > 1 ? "s" : ""} — pick one below to extract it.`
@@ -1100,58 +1066,63 @@ async function detectSpeakers(filename) {
   }
 }
 
-/** Render speaker direction chips from a speakers array. */
+/** Render speaker direction chips from a speakers array. The radar is always
+ *  shown (it doubles as a click-to-aim control), so this only fills the chip
+ *  strip + keeps the readout / clear button in sync. */
 function renderSpeakerChips(speakers) {
   const wrap = $("speakerChips");
-  const radar = $("azRadar");
   if (!wrap) return;
   wrap.innerHTML = "";
   if (!speakers || speakers.length === 0) {
-    wrap.innerHTML = '<span class="speaker-empty">No speakers detected — click ⊕ Detect.</span>';
-    if (radar) radar.classList.add("hidden");
-    const clearBtn = $("clearSpeakerBtn");
-    if (clearBtn) clearBtn.classList.add("hidden");
-    return;
-  }
-  speakers.forEach(sp => {
-    const az = Math.round(sp.az);
-    const strength = Math.round((sp.strength || 0) * 100);
-    const activity = Math.round((sp.activity || 0) * 100);
-    const isActive = state.targetAz != null && azSep(sp.az, state.targetAz) < 1.0;
-    const chip = document.createElement("button");
-    chip.className = "speaker-chip" + (isActive ? " active" : "");
-    chip.dataset.az = sp.az;
-    chip.title = `Azimuth ${az > 0 ? "+" : ""}${az}° · strength ${strength}% · activity ${activity}%`;
-    chip.innerHTML =
-      `<span class="sc-dir">${az > 0 ? "+" : ""}${az}°</span>` +
-      `<span class="sc-bar"><span class="sc-fill" style="width:${strength}%"></span></span>`;
-    chip.addEventListener("click", () => {
-      if (isActive) {
-        clearSpeakerSelection();
-      } else {
-        selectSpeaker(sp.az, speakers);
-      }
+    wrap.innerHTML = '<span class="speaker-empty">⊕ Detect to list talkers, or click the radar to aim.</span>';
+  } else {
+    speakers.forEach(sp => {
+      const az = Math.round(sp.az);
+      const strength = Math.round((sp.strength || 0) * 100);
+      const activity = Math.round((sp.activity || 0) * 100);
+      const isActive = state.targetAz != null && azSep(sp.az, state.targetAz) < 1.0;
+      const chip = document.createElement("button");
+      chip.className = "speaker-chip" + (isActive ? " active" : "");
+      chip.dataset.az = sp.az;
+      chip.title = `Azimuth ${az > 0 ? "+" : ""}${az}° · strength ${strength}% · activity ${activity}%`;
+      chip.innerHTML =
+        `<span class="sc-dir">${az > 0 ? "+" : ""}${az}°</span>` +
+        `<span class="sc-bar"><span class="sc-fill" style="width:${strength}%"></span></span>`;
+      chip.addEventListener("click", () => {
+        if (isActive) clearSpeakerSelection();
+        else selectSpeaker(sp.az, speakers);
+      });
+      wrap.appendChild(chip);
     });
-    wrap.appendChild(chip);
-  });
-  if (radar) radar.classList.remove("hidden");
+  }
   drawAzRadar(speakers, state.targetAz);
+  updateTargetReadout();
   const clearBtn = $("clearSpeakerBtn");
   if (clearBtn) clearBtn.classList.toggle("hidden", state.targetAz == null);
 }
 
-/** Mark one azimuth as the extraction target; all others become interferers. */
+/** Mark one detected azimuth as the extraction target; the others become
+ *  interferers. */
 function selectSpeaker(az, speakers) {
-  state.targetAz = az;
+  state.targetAz = Math.round(az);
   state.interfererAz = (speakers || state.detectedSpeakers)
     .map(s => s.az)
     .filter(a => azSep(a, az) >= 20);
   renderSpeakerChips(state.detectedSpeakers);
-  drawAzRadar(state.detectedSpeakers, state.targetAz);
-  const clearBtn = $("clearSpeakerBtn");
-  if (clearBtn) clearBtn.classList.remove("hidden");
   const label = `${az > 0 ? "+" : ""}${Math.round(az)}°`;
   toast(`Will extract speaker at ${label} on next run — click ↻ Re-run or analyse a file.`, "ok");
+}
+
+/** Aim at an ARBITRARY azimuth (radar click) — not necessarily a detected
+ *  talker. Interferers come from any detected directions ≥20° away; if none
+ *  were detected, the pipeline auto-detects them at run time. */
+function setManualTarget(az) {
+  az = Math.round((((az + 180) % 360 + 360) % 360) - 180);   // → [-180,180)
+  state.targetAz = az;
+  const others = (state.detectedSpeakers || []).map(s => s.az).filter(a => azSep(a, az) >= 20);
+  state.interfererAz = others.length ? others : null;
+  renderSpeakerChips(state.detectedSpeakers);
+  toast(`Aimed at ${az > 0 ? "+" : ""}${az}° — re-run to extract that direction.`, "ok");
 }
 
 /** Remove the speaker filter — next run will process all voices. */
@@ -1159,10 +1130,37 @@ function clearSpeakerSelection() {
   state.targetAz = null;
   state.interfererAz = null;
   renderSpeakerChips(state.detectedSpeakers);
-  drawAzRadar(state.detectedSpeakers, null);
-  const clearBtn = $("clearSpeakerBtn");
-  if (clearBtn) clearBtn.classList.add("hidden");
   toast("Speaker filter cleared — all voices will be processed.", "ok");
+}
+
+/** Map a click on the radar canvas to an azimuth in [-180,180), or null if the
+ *  click is too near the centre (ambiguous). Accounts for CSS scaling. */
+function radarClickToAz(canvas, evt) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (evt.clientX - rect.left) * (canvas.width / rect.width);
+  const y = (evt.clientY - rect.top) * (canvas.height / rect.height);
+  const dx = x - canvas.width / 2, dy = y - canvas.height / 2;
+  if (Math.hypot(dx, dy) < 8) return null;
+  // inverse of drawAzRadar: screen angle = (az - 90)°
+  const az = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+  return Math.round((((az + 180) % 360 + 360) % 360) - 180);
+}
+
+/** Update the small "target NN°" / "all voices" readout under the radar. */
+function updateTargetReadout() {
+  const el = $("targetReadout");
+  if (!el) return;
+  if (state.targetAz == null) {
+    el.textContent = "all voices · ⊕ Detect, or click the radar to aim";
+    el.classList.remove("armed");
+  } else {
+    const a = state.targetAz;
+    el.textContent = `🎯 target ${a > 0 ? "+" : ""}${a}°` +
+      (state.interfererAz && state.interfererAz.length
+        ? ` · nulling ${state.interfererAz.map(v => (v > 0 ? "+" : "") + Math.round(v) + "°").join(", ")}`
+        : "");
+    el.classList.add("armed");
+  }
 }
 
 /** Drop the speaker selection + chips when we move to a different file — a
@@ -1202,8 +1200,10 @@ function drawAzRadar(speakers, targetAz) {
   ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
   ctx.fillStyle = "#334155"; ctx.fill();
   // Draw each detected speaker
+  let targetMatched = false;
   (speakers || []).forEach(sp => {
     const isTarget = targetAz != null && azSep(sp.az, targetAz) < 1.0;
+    if (isTarget) targetMatched = true;
     const rad = (sp.az - 90) * Math.PI / 180;
     const r = R * (0.55 + 0.35 * (sp.strength || 0.5));
     const x = cx + r * Math.cos(rad), y = cy + r * Math.sin(rad);
@@ -1219,6 +1219,23 @@ function drawAzRadar(speakers, targetAz) {
       ctx.strokeStyle = "rgba(45,212,191,0.3)"; ctx.lineWidth = 2; ctx.stroke();
     }
   });
+  // Manual aim that isn't one of the detected talkers → draw its own marker so
+  // a radar-click target is always visible.
+  if (targetAz != null && !targetMatched) {
+    const rad = (targetAz - 90) * Math.PI / 180;
+    const x = cx + R * 0.85 * Math.cos(rad), y = cy + R * 0.85 * Math.sin(rad);
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
+    ctx.strokeStyle = "#2dd4bf"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI);
+    ctx.fillStyle = "#2dd4bf"; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, 2 * Math.PI);
+    ctx.strokeStyle = "rgba(45,212,191,0.3)"; ctx.lineWidth = 2; ctx.stroke();
+  }
+  // Hint when nothing is aimed/detected.
+  if ((!speakers || !speakers.length) && targetAz == null) {
+    ctx.fillStyle = "#3a4a57"; ctx.font = "8px JetBrains Mono, monospace";
+    ctx.textAlign = "center"; ctx.fillText("click to aim", cx, cy + R + 9);
+  }
 }
 
 
@@ -1261,18 +1278,31 @@ function setupProdControls() {
     r.addEventListener("input", show);
     show();
   }
+  // Advanced-knob live readouts (slider value → label).
+  const liveLabel = (id, valId, fmt) => {
+    const el = $(id), lab = $(valId);
+    if (!el || !lab) return;
+    const show = () => { lab.textContent = fmt(parseFloat(el.value)); };
+    el.addEventListener("input", show); show();
+  };
+  liveLabel("prodBlend", "prodBlendVal", v => v.toFixed(2));
+  liveLabel("prodDfnCap", "prodDfnCapVal", v => `${v} dB`);
+  liveLabel("prodPauseFloor", "prodPauseFloorVal", v => `−${Math.abs(v)} dB`);
+
   // Preset dropdown drives the individual knobs; touching any knob flips the
   // preset back to "custom" so the label never lies about the live settings.
   const preset = $("prodPreset");
   if (preset) {
     preset.addEventListener("change", () => applyProdPreset(preset.value));
-    ["prodNr", "prodBeam", "prodMask", "prodDereverb", "prodResidual"].forEach(id => {
+    ["prodNr", "prodBeam", "prodMask", "prodDereverb", "prodResidual",
+     "prodBlend", "prodDfnCap", "prodPauseFloor"].forEach(id => {
       const el = $(id);
       if (el) el.addEventListener("change", () => {
         if (preset.value !== "custom") preset.value = "custom";
       });
     });
   }
+  populateReferencePicker();
   // Speaker detection + clear buttons
   const detectBtn = $("detectSpeakersBtn");
   if (detectBtn) detectBtn.addEventListener("click", () => {
@@ -1281,6 +1311,40 @@ function setupProdControls() {
   });
   const clearSpBtn = $("clearSpeakerBtn");
   if (clearSpBtn) clearSpBtn.addEventListener("click", () => clearSpeakerSelection());
+  // Radar is a click-to-aim control: click any direction to steer the beam there
+  // (snapping to a nearby detected talker if one is within 8°).
+  const radar = $("azRadar");
+  if (radar) {
+    radar.addEventListener("click", (e) => {
+      const az = radarClickToAz(radar, e);
+      if (az == null) return;
+      const near = (state.detectedSpeakers || []).find(s => azSep(s.az, az) < 8);
+      if (near) selectSpeaker(near.az, state.detectedSpeakers);
+      else setManualTarget(az);
+    });
+    drawAzRadar(state.detectedSpeakers, state.targetAz);   // initial empty radar
+    updateTargetReadout();
+  }
+}
+
+/** Fill the AEC reference dropdown from the input file list, preserving the
+ *  current choice. Pass the already-fetched file list to avoid a second call;
+ *  otherwise it fetches. Called on init and whenever the file list changes. */
+async function populateReferencePicker(fileList) {
+  const sel = $("prodReference");
+  if (!sel) return;
+  const keep = sel.value;
+  try {
+    let files = fileList;
+    if (!files) {
+      const j = await (await fetch("/api/list_input")).json();
+      files = j.files || [];
+    }
+    const names = files.map(f => f.name);
+    sel.innerHTML = `<option value="">None (AEC off)</option>` +
+      names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    if (keep && names.includes(keep)) sel.value = keep;
+  } catch { /* leave the existing options on a fetch failure */ }
 }
 
 /** Read the current pipeline control knobs from the results panel. */
@@ -1298,6 +1362,14 @@ function getProdOpts() {
     eq:    ($("prodEq") ? $("prodEq").checked : true),
     report: ($("prodReport") ? $("prodReport").checked : false),
   };
+  // AEC far-end reference (a no-op without it) — only send when one is chosen.
+  const refSel = $("prodReference");
+  if (refSel && refSel.value) opts.reference = refSel.value;
+  // Advanced knobs — only override the backend defaults when present.
+  if ($("prodBlend"))      opts.mvdr_blend = parseFloat($("prodBlend").value);
+  if ($("prodDfnCap"))     opts.dfn_atten_lim_db = parseFloat($("prodDfnCap").value);
+  if ($("prodPauseFloor")) opts.pause_floor_db = parseFloat($("prodPauseFloor").value);
+  if ($("prodDoaReadout")) opts.doa_readout = $("prodDoaReadout").checked;
   // Target-speaker extraction: pass when a speaker is selected via the chip UI.
   if (state.targetAz != null) {
     opts.target_az = state.targetAz;
@@ -1379,16 +1451,63 @@ function renderProduction(j) {
   const pb = $("playoutBtn");
   if (pb) pb.onclick = () => playToDevice(stem);
 
+  // Output title + signal chain reflect what actually ran this pass.
+  const bf = (j.stages || {}).beamform || {};
+  const targeted = bf.method === "extract_direction" && bf.target_az != null;
+  if ($("winnerName")) {
+    $("winnerName").textContent = targeted
+      ? `Speaker @ ${bf.target_az > 0 ? "+" : ""}${bf.target_az}°` : "Clean voice";
+  }
+  if ($("winnerFormula")) $("winnerFormula").textContent = buildChainText(j);
+
   loadABPlayers(j.input, j.clean,
     `raw 8-ch downmix`,
     `${opthLabel(getProdOpts())} · ${j.elapsed_s}s`);
   renderProdStages(j.stages || {}, j.timings || {});
   res.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // Auto-detect talkers so the picker is pre-populated — but not during a batch
+  // run, not if a target is already chosen, and not if we already detected this
+  // file (re-runs keep the existing list).
+  maybeAutoDetect(stem);
+}
+
+/** Build the signal-chain string from the stages that actually ran. */
+function buildChainText(j) {
+  const st = j.stages || {};
+  const ran = k => st[k] && st[k].ran;
+  const bf = st.beamform || {};
+  const parts = ["calibrate"];
+  if (ran("highpass")) parts.push("HPF");
+  if (ran("vad")) parts.push("VAD");
+  if (ran("doa")) parts.push("DOA");
+  if (bf.method === "extract_direction" && bf.target_az != null)
+    parts.push(`extract @${bf.target_az > 0 ? "+" : ""}${bf.target_az}°`);
+  else if (ran("beamform")) parts.push(`MVDR (${bf.beam_mode || "auto"})`);
+  if (ran("dereverb_spectral")) parts.push("dereverb");
+  if (ran("dereverb_wpe")) parts.push("WPE");
+  if (ran("aec")) parts.push("AEC");
+  if (ran("noise_reduction")) parts.push((st.noise_reduction || {}).engine || "NR");
+  if (ran("residual_suppress")) parts.push("residual");
+  if (ran("automix")) parts.push("automix");
+  if (ran("agc_eq_limiter")) parts.push("AGC/EQ");
+  parts.push("out");
+  return parts.join(" → ");
+}
+
+/** Kick off speaker detection after a clean so the picker is ready to use. */
+function maybeAutoDetect(stem) {
+  if (state.runningAll) return;                    // not during "Clean all"
+  if (state.targetAz != null) return;              // already aiming somewhere
+  const fname = `${stem}.wav`;
+  if (state.speakersFile === fname) return;        // already have this file's list
+  detectSpeakers(fname);                           // fire-and-forget (no Busy lock)
 }
 
 function opthLabel(o) {
   const dv = (o.dereverb && o.dereverb !== "none") ? ` · derev:${o.dereverb}` : "";
-  return `NR:${o.nr}${dv} · beam:${o.beam}${o.eq ? " · EQ" : ""}`;
+  const tgt = (o.target_az != null) ? ` · target ${o.target_az}°` : "";
+  return `NR:${o.nr}${dv} · beam:${o.beam}${o.eq ? " · EQ" : ""}${tgt}`;
 }
 
 /** Point the "Report" button at the standalone HTML report (opens in a new tab),
@@ -1560,265 +1679,12 @@ async function playToDevice(stem) {
   }
 }
 
-/* ── instrument-only renderers below are retired (no longer called); kept
- *    defined so any stray reference stays a no-throw. ── */
-function renderLeaderboard(m) {
-  const stats = m.bootstrap_stats || {};
-  const entries = Object.entries(stats).map(([name, s]) => ({
-    name, snr: s.median_snr_db, win_rate: s.win_rate_pct,
-    is_winner: name === m.winner.winner,
-    is_sota: name === "Neural-MVDR-WPE",
-  })).sort((a, b) => b.win_rate - a.win_rate);
-
-  const maxR = Math.max(...entries.map(e => e.win_rate), 1);
-  $("leaderboard").innerHTML = entries.map((e, i) => {
-    const classes = ["lb-row"];
-    if (e.is_winner) classes.push("winner");
-    if (e.is_sota)   classes.push("sota");
-    const pct = (e.win_rate / maxR) * 100;
-    const info = ALGO_INFO[e.name] || { formula: "" };
-    const snrStr = (e.snr >= 0 ? "+" : "") + e.snr.toFixed(2) + " dB";
-    return `
-      <div class="${classes.join(' ')}">
-        <div class="lb-rank">${e.is_winner ? '★' : (i+1)}</div>
-        <div class="lb-name">${esc(e.name)}<span class="lb-formula">${info.formula}</span></div>
-        <div class="lb-snr">${snrStr}</div>
-        <div class="lb-bar"><div class="lb-bar-fill" style="width:${pct}%"></div></div>
-        <div class="lb-pct">${e.win_rate.toFixed(1)}%</div>
-      </div>`;
-  }).join("");
-}
-
-
-function renderBeampatterns(m) {
-  const grid = $("bpGrid");
-  const bps = m.beampatterns || {};
-  if (!Object.keys(bps).length) {
-    grid.innerHTML = `<div style="color:var(--muted);text-align:center;padding:24px;grid-column:1/-1;">No beampatterns computed.</div>`;
-    return;
-  }
-  const winnerName = m.winner.winner;
-  const doaAz = (m.estimated_doa || {}).az_deg || 0;
-  const freq = state.bpFreq;
-  grid.innerHTML = Object.entries(bps).map(([name, data]) => {
-    if (!data || !data[freq]) return "";
-    const isW = name === winnerName;
-    const isS = name === "Neural-MVDR-WPE";
-    const k = "bp-card" + (isW ? " winner" : "") + (isS ? " sota" : "");
-    return `<div class="${k}">
-      <div class="bp-card-head">
-        <span>${isW ? '★ ' : ''}${esc(name)}</span>
-        ${isS ? '<span class="bp-card-tag">SOTA</span>' : ''}
-      </div>
-      ${drawBeampatternSVG(data[freq], doaAz, isS)}
-    </div>`;
-  }).join("");
-}
-
-function drawBeampatternSVG(bp, estAz, isSota) {
-  if (!bp || !bp.az_deg || !bp.response_db) return "";
-  const azs = bp.az_deg, resp = bp.response_db;
-  const dbFloor = -30, rOuter = 95, rInner = 8;
-  const toR = db => {
-    const n = Math.max(0, Math.min(1, (db - dbFloor) / -dbFloor));
-    return rInner + (rOuter - rInner) * n;
-  };
-  const toXY = (az, r) => {
-    const a = (az - 90) * Math.PI / 180;
-    return [r * Math.cos(a), r * Math.sin(a)];
-  };
-  const fill = isSota ? "rgba(167, 139, 250, 0.30)" : "rgba(45, 212, 191, 0.30)";
-  const stroke = isSota ? "#A78BFA" : "#2DD4BF";
-  let h = `<svg class="bp-svg" viewBox="-110 -110 220 220" preserveAspectRatio="xMidYMid meet">`;
-  for (const db of [0, -10, -20, -30]) {
-    h += `<circle cx="0" cy="0" r="${toR(db)}" fill="none" stroke="rgba(255,255,255,0.06)"/>`;
-  }
-  h += `<line x1="-100" y1="0" x2="100" y2="0" stroke="rgba(255,255,255,0.06)"/>
-        <line x1="0" y1="-100" x2="0" y2="100" stroke="rgba(255,255,255,0.06)"/>`;
-  h += `<text x="0" y="-103" fill="rgba(168,176,196,0.6)" font-size="7" text-anchor="middle" font-family="JetBrains Mono">0°</text>
-        <text x="106" y="0" fill="rgba(168,176,196,0.6)" font-size="7" dy="2" font-family="JetBrains Mono">90</text>
-        <text x="0" y="108" fill="rgba(168,176,196,0.6)" font-size="7" text-anchor="middle" font-family="JetBrains Mono">180</text>
-        <text x="-106" y="0" fill="rgba(168,176,196,0.6)" font-size="7" text-anchor="end" dy="2" font-family="JetBrains Mono">270</text>`;
-  let pts = "";
-  for (let i = 0; i < azs.length; i++) {
-    const r = toR(resp[i]);
-    const [x, y] = toXY(azs[i], r);
-    pts += `${x.toFixed(2)},${y.toFixed(2)} `;
-  }
-  h += `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="1.4"/>`;
-  for (let i = 0; i < 8; i++) {
-    const a = (i * 45 - 90) * Math.PI / 180;
-    h += `<circle cx="${(5*Math.cos(a)).toFixed(2)}" cy="${(5*Math.sin(a)).toFixed(2)}" r="1.4" fill="rgba(45,212,191,0.7)"/>`;
-  }
-  const [ex, ey] = toXY(estAz, rOuter + 5);
-  h += `<line x1="0" y1="0" x2="${ex.toFixed(2)}" y2="${ey.toFixed(2)}" stroke="#FB7185" stroke-width="1.5"/>
-        <circle cx="${ex.toFixed(2)}" cy="${ey.toFixed(2)}" r="2.5" fill="#FB7185"/>`;
-  h += `<text x="-105" y="-101" fill="rgba(168,176,196,0.5)" font-size="7" font-family="JetBrains Mono">${(bp.freq_hz/1000).toFixed(2)} kHz</text>`;
-  h += `</svg>`;
-  return h;
-}
-
-
-function renderDoARadar(m) {
-  const map = m.doa_confidence_map;
-  const estAz = (m.estimated_doa || {}).az_deg || 0;
-  const estEl = (m.estimated_doa || {}).el_deg || 0;
-  const svg = $("doaRadar");
-  if (!map || !map.confidence) {
-    svg.innerHTML = "";
-    $("doaReadout").textContent = "—";
-    return;
-  }
-  const azs = map.az_deg || [];
-  const els = map.el_deg || [0];
-  const idx0 = Math.max(0, els.indexOf(0));
-  const conf = map.confidence[idx0] || map.confidence[0] || [];
-  const maxC = Math.max(...conf, 1e-9);
-  const rOuter = 92, rInner = 22;
-  const stepDeg = azs.length > 1 ? (azs[1] - azs[0]) : 15;
-
-  let h = "";
-  for (const r of [40, 60, 92]) {
-    h += `<circle cx="0" cy="0" r="${r}" fill="none" stroke="rgba(255,255,255,0.06)"/>`;
-  }
-  for (let i = 0; i < conf.length; i++) {
-    const az = azs[i], az2 = az + stepDeg;
-    const c = conf[i] / maxC;
-    const r = rInner + (rOuter - rInner) * c;
-    const a1 = (az - 90) * Math.PI / 180, a2 = (az2 - 90) * Math.PI / 180;
-    const x1 = r * Math.cos(a1), y1 = r * Math.sin(a1);
-    const x2 = r * Math.cos(a2), y2 = r * Math.sin(a2);
-    const xi1 = rInner * Math.cos(a1), yi1 = rInner * Math.sin(a1);
-    const xi2 = rInner * Math.cos(a2), yi2 = rInner * Math.sin(a2);
-    h += `<path d="M ${xi1.toFixed(2)} ${yi1.toFixed(2)} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${xi2.toFixed(2)} ${yi2.toFixed(2)} Z"
-            fill="rgba(45,212,191,${0.15 + 0.65*c})" stroke="rgba(45,212,191,0.4)" stroke-width="0.4"/>`;
-  }
-  for (let i = 0; i < 8; i++) {
-    const a = (i * 45 - 90) * Math.PI / 180;
-    h += `<circle cx="${(14*Math.cos(a)).toFixed(2)}" cy="${(14*Math.sin(a)).toFixed(2)}" r="2" fill="rgba(45,212,191,0.7)"/>`;
-  }
-  const a = (estAz - 90) * Math.PI / 180;
-  const ex = (rOuter + 5) * Math.cos(a), ey = (rOuter + 5) * Math.sin(a);
-  h += `<line x1="0" y1="0" x2="${ex.toFixed(2)}" y2="${ey.toFixed(2)}" stroke="#FB7185" stroke-width="2"/>
-        <circle cx="${ex.toFixed(2)}" cy="${ey.toFixed(2)}" r="3.5" fill="#FB7185"/>`;
-  // Cardinal + diagonal labels — every 45°, placed outside the outer ring
-  const labelR = 112;
-  const labels = [
-    {deg: 0,   text: "0°"},
-    {deg: 45,  text: "45°"},
-    {deg: 90,  text: "90°"},
-    {deg: 135, text: "135°"},
-    {deg: 180, text: "180°"},
-    {deg: 225, text: "225°"},
-    {deg: 270, text: "270°"},
-    {deg: 315, text: "315°"},
-  ];
-  for (const lb of labels) {
-    const ar = (lb.deg - 90) * Math.PI / 180;
-    const lx = labelR * Math.cos(ar);
-    const ly = labelR * Math.sin(ar);
-    // Anchor based on position
-    let anchor = "middle";
-    if (lx > 8)       anchor = "start";
-    else if (lx < -8) anchor = "end";
-    h += `<text x="${lx.toFixed(1)}" y="${(ly+3).toFixed(1)}" fill="rgba(168,176,196,0.85)" font-size="10" text-anchor="${anchor}" font-family="JetBrains Mono">${lb.text}</text>`;
-  }
-  svg.innerHTML = h;
-  // Backend SRP search uses [-180, 180) convention; labels around the
-  // radar use [0, 360). Normalize azimuth before display so they agree.
-  // -180 → 180, -90 → 270, -45 → 315, etc.
-  const azDisp = ((Math.round(estAz) % 360) + 360) % 360;
-  // Elevation is searched on a 5-point grid: -60, -30, 0, +30, +60.
-  // Display as integer degrees with sign for clarity.
-  const elDisp = Math.round(estEl);
-  $("doaReadout").textContent = `Azimuth ${azDisp}°   ·   Elevation ${elDisp >= 0 ? '+' : ''}${elDisp}°`;
-}
-
-
-function renderBandChart(m) {
-  const bands = m.per_band_snr;
-  if (!bands || !bands.length) {
-    $("bandChart").innerHTML = `<div style="color:var(--muted);text-align:center;padding:16px;">No band data</div>`;
-    return;
-  }
-  const maxD = Math.max(...bands.map(b => Math.abs(b.improvement_db || 0)), 1);
-  $("bandChart").innerHTML = bands.map(b => {
-    const d = b.improvement_db || 0;
-    const pct = Math.max(2, Math.abs(d) / maxD * 100);
-    const sign = d >= 0 ? "+" : "";
-    return `<div class="band-row">
-      <div class="band-row-label">${esc(b.band_hz)}</div>
-      <div class="band-bar-wrap"><div class="band-bar" style="width:${pct}%"></div></div>
-      <div class="band-row-val">${sign}${d.toFixed(1)} dB</div>
-    </div>`;
-  }).join("");
-}
-
-
-/* ═══════════════════ VERDICT (instrument-only — retired) ═══════════════════ */
-function setupVerdictRefresh() {
-  const btn = $("refreshVerdict");
-  if (btn) btn.addEventListener("click", () => { loadVerdict(); refreshFiles(); });
-}
-
-async function loadVerdict() {
-  // The cross-recording verdict UI is retired in the production build.
-  if (!$("verdictSub")) return;
-  let v;
-  try {
-    const r = await fetch("/api/verdict");
-    v = await r.json();
-  } catch { return; }
-  const n = v.recordings_analysed || 0;
-  if (n === 0) {
-    $("verdictSub").textContent = "Process at least one recording to see the verdict.";
-    $("verdictBanner").classList.add("hidden");
-    $("verdictTable").innerHTML = "";
-    $("recordingsTable").innerHTML = "";
-    return;
-  }
-  $("verdictSub").textContent = `Based on ${n} recording${n>1?'s':''} you've analysed.`;
-  if (v.best_algorithm) {
-    $("verdictBanner").classList.remove("hidden");
-    $("vbName").textContent = v.best_algorithm;
-    $("vbSummary").textContent = v.best_summary;
-    $("vbScore").textContent = (v.per_algo[v.best_algorithm]?.consistency_score || 0).toFixed(1);
-  }
-  const ranked = Object.entries(v.per_algo)
-    .sort((a, b) => b[1].consistency_score - a[1].consistency_score);
-  $("verdictTable").innerHTML = `
-    <div class="vt-head">
-      <div></div><div>Algorithm</div><div style="text-align:right">Wins</div>
-      <div style="text-align:right">Mean SNR</div><div style="text-align:right">Bootstrap %</div>
-      <div style="text-align:right">Score</div>
-    </div>
-    ${ranked.map(([name, s], i) => `
-      <div class="vt-row ${i===0?'top':''}">
-        <div class="vt-rank">${i===0 ? '★' : (i+1)}</div>
-        <div class="vt-name">${esc(name)}</div>
-        <div class="vt-num">${s.wins}/${s.appearances}</div>
-        <div class="vt-num">${s.avg_median_snr_db.toFixed(2)} dB</div>
-        <div class="vt-num">${s.avg_bootstrap_win_rate_pct.toFixed(1)}%</div>
-        <div class="vt-score">${s.consistency_score.toFixed(1)}</div>
-      </div>`).join("")}`;
-  const recs = v.recordings || [];
-  $("recordingsTable").innerHTML = `
-    <div class="rt-head">
-      <div>File</div><div>Winner</div><div style="text-align:right">Confidence</div>
-      <div style="text-align:right">SNR</div><div style="text-align:right">Duration</div>
-    </div>
-    ${recs.map(r => `
-      <div class="rt-row" data-stem="${esc(r.stem)}">
-        <div class="rt-stem">${esc(r.stem)}</div>
-        <div class="rt-winner">${esc(r.winner)}</div>
-        <div class="rt-num">${r.confidence.toFixed(0)}%</div>
-        <div class="rt-num">${(r.snr_db>=0?'+':'') + r.snr_db.toFixed(2)} dB</div>
-        <div class="rt-num">${r.duration_s.toFixed(1)} s</div>
-      </div>`).join("")}`;
-  qsa(".rt-row").forEach(r => {
-    r.addEventListener("click", () => showResults(r.dataset.stem));
-  });
-}
+/* The 6-algorithm instrument UI (leaderboard, beampatterns, DOA radar, band
+ * chart, cross-recording verdict) was retired when the production clean-voice
+ * pipeline became the only path. Its renderers referenced DOM nodes that no
+ * longer exist in index.html, so they are removed outright. `loadVerdict` is
+ * kept as a no-op because a few post-mutation callers still invoke it. */
+function loadVerdict() { /* retired — no verdict UI in the production build */ }
 
 
 /* ═══════════════════ UTIL ═══════════════════ */

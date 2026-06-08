@@ -119,7 +119,7 @@ real-time spot).
 
 | Control | Options | What it does |
 |---------|---------|--------------|
-| **Target speaker** | ⊕ Detect chip-picker | Scan the recording with SRP-PHAT (`/api/speakers`) → chip strip shows each detected direction. Click a chip to route stage [6] through `extract_direction` (direction-masked RTF-MVDR) — only that talker comes out. Click the active chip or × Clear to go back to normal. Target + interferer azimuths are passed automatically so the pipeline skips the re-detection. **Accuracy note:** on the 40 mm array this isolates **outer talkers cleanly (~+13–15 dB) but a talker flanked on both sides only ~+2–5 dB** — the array's angular-resolution floor. Detected angles also carry a ~10° inward bias, but extraction tolerates a few degrees so picking the nearest chip still works. |
+| **Target speaker** | ⊕ Detect chips · click-to-aim radar | Two ways to pick "whose voice": **⊕ Detect** scans the recording with SRP-PHAT (`/api/speakers`) and shows a chip per direction (a clean run also auto-detects), or **click the radar** to aim the beam at any direction by hand (snaps to a nearby detected talker within 8°). Either routes stage [6] through `extract_direction` (direction-masked RTF-MVDR) — only that talker comes out. Click the active chip or × Clear to go back to all voices. **Accuracy note:** on the 40 mm array this isolates **outer talkers cleanly (~+13–15 dB) but a talker flanked on both sides only ~+2–5 dB** — the array's angular-resolution floor. Detected angles carry a ~10° inward bias, but extraction tolerates a few degrees, so picking the nearest chip — or nudging the radar by ear — still works. |
 | **Preset** | **Quality** · Fast · Custom | one-click profiles. **Quality** (default) = the full DFN3 chain below, output unchanged. **Fast** = lowest runtime (`nr=fast`, `beam=batch` so the movement detectors are skipped, `mask=coherence`, lighter residual) — **~0.33× real-time vs ~0.44× for Quality**. Touching any knob flips to Custom |
 | Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine (DFN3 capped at 32 dB). **Default DFN3** |
 | Denoise strength | 0 … 1 slider (default 0.6) | stage 8c residual mop-up — 0 = off, ~0.3 gentle, 0.6 natural, 1.0 near-silent bed |
@@ -127,11 +127,13 @@ real-time spot).
 | Movement | SRP-PHAT · RTF drift | which signal decides batch-vs-tracked in `auto` (default **RTF drift**). Runs only when `beam=auto` |
 | Mask | SNR · coherence-auto · coherence | speech/noise mask for the MVDR covariance; coherence adds the spatial (ASA) cue. **`auto`** (default) builds both beams and keeps the better — never worse than baseline. Affects the batch beam only |
 | AGC | perceptual · **RMS** | stage 10 loudness control (default **RMS**, instantaneous) |
-| AEC | partitioned · single-tap | stage 7 echo canceller (needs a reference WAV) |
+| AEC | partitioned · single-tap | stage 7 echo canceller (active only with an AEC reference, below) |
+| AEC reference | None · ‹input file› | the far-end loudspeaker feed for echo cancellation. **None (default)** = AEC is a pass-through; pick a file to engage stage 7 |
 | Noise-robust tracking | on / off | the tracking-path conditioner (5·track) |
 | Dereverb | none · spectral · WPE | spectral = fast single-channel late-reverb suppressor (~0.02× RT); WPE = multichannel front-end (~3× RT). Off by default |
 | EQ | on / off | gentle speech-presence EQ |
 | **Generate report** | on / **off** | stage [report] HTML + matplotlib figure. **Off by default** so the 200–700 ms render is opt-in (it's not needed for the clean WAV) |
+| **Advanced** (collapsible) | sliders + toggle | off-axis blend (`mvdr_blend`, default 0.6 — higher keeps more of the off-axis speakers), DFN cap (`dfn_atten_lim_db`, default 32 dB), pause floor (`pause_floor_db`, default −40 dB), and a DOA azimuth readout toggle (`doa_readout`, diagnostic). All optional overrides of the API defaults |
 
 > **Note on tracking & beam-weighting.** The "noise-robust tracking" split is the
 > transferable idea from ceiling-array products (Biamp Parlé et al.): the

@@ -1,5 +1,63 @@
 # Changelog
 
+## 2026-06-08 — Room Acoustics estimator joined into the app (`/acoustics`)
+
+A standalone TypeScript/React room-acoustics module (RT60 + axial modes from
+room geometry and surface materials, with a Web Audio auralization preview) now
+lives in [`room-acoustics/`](room-acoustics/) and is **surfaced inside OCTOVOX**.
+The engine is pure, DOM-free, strict-typed TS (24 Vitest tests, hand-computed
+Sabine sanity check); a thin React layer renders zero-dependency SVG charts.
+
+- **Joined as a page, not a rewrite.** `npm run build` (in `room-acoustics/`)
+  emits the Vite bundle into `octovox_app/static/acoustics/` with base
+  `/static/acoustics/`; Flask serves it at **`/acoustics`** (new `pages.acoustics`
+  route) and the top-bar **Acoustics ↗** link points to it. The two codebases
+  stay separate — one server, one nav. The built bundle is committed so the page
+  works with no build step.
+- It is a **UI-level** join: the acoustics estimator (geometry → predicted RT60)
+  does not share data with the mic-array DSP path. See `room-acoustics/README.md`
+  for the formulas and an explicit limitations section.
+
+---
+
+## 2026-06-08 — Console repair + click-to-aim radar + AEC/advanced controls
+
+A UI hardening and feature pass on the Console.
+
+**Repair (dead-code removal).** The retired 6-algorithm instrument renderers
+(`renderLeaderboard`, `renderBeampatterns`, `drawBeampatternSVG`, `renderDoARadar`,
+`renderBandChart`), the cross-recording verdict UI (`setupVerdictRefresh`;
+`loadVerdict` is now a no-op stub), and `setupMicTilt` were deleted — ~270 lines
+that referenced **13 DOM ids no longer present in the page**. These were the exact
+"unguarded `$(\"removed\")` at init kills every button" hazard. Every `$(\"id\")` in
+`app.js` now resolves to a real element (checked by cross-referencing against the
+template). Orphaned `ALGO_INFO` / `state.bpFreq` removed.
+
+**Added.**
+- **Click-to-aim radar.** The azimuth radar is now interactive — click any
+  direction to steer the beam there (snapping to a detected talker within 8°, else
+  a manual angle). Since extraction tolerates a few degrees, this is the practical
+  fix for the detector's ~10° bias: aim by ear. New `🎯 target …° · nulling …`
+  readout under the radar.
+- **Auto-detect after clean.** A single-file clean now auto-runs speaker detection
+  and populates the chips/radar (skipped during "Clean all" or when a target is
+  already chosen).
+- **AEC reference picker.** A dropdown of input files feeds the far-end
+  `reference` — AEC was previously **unreachable from the UI**. No reference → AEC
+  skips; with one → it engages (reports ERLE).
+- **Advanced panel.** A collapsible `Advanced` group exposes off-axis blend
+  (`mvdr_blend`), DFN attenuation cap (`dfn_atten_lim_db`), automix pause floor
+  (`pause_floor_db`), and the DOA azimuth readout (`doa_readout`) — all already in
+  the API, now in the console.
+- **Dynamic signal-chain readout.** The output panel's chain text reflects the
+  stages that actually ran this pass (e.g. `… → extract @-155° → DFN3 → … → out`)
+  instead of a hardcoded string.
+
+All wiring verified end-to-end against the running server (page render, detect,
+targeted clean, AEC-engages-with-reference, advanced knobs take effect).
+
+---
+
 ## 2026-06-06 — Target-speaker selection ("whose voice?")
 
 Multi-talker recordings now have a speaker picker. Click **⊕ Detect** in the
