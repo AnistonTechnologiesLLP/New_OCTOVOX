@@ -104,7 +104,7 @@ real-time spot).
 | 4 | VAD / speech detector | Silero |
 | 5 | DOA / talker tracking | block-wise SRP-PHAT (azimuth readout — **opt-in diagnostic**; front/back ambiguous on this UCA so it never steers the beam) |
 | 5b | **Movement selector** | SRP-PHAT spread *or* **RTF drift** (ambiguity-free; auto-switches batch↔tracked). Runs only when it can change the beam (`beam=auto`) |
-| 6 | Beamforming 8→1 | batch / tracked RTF-MVDR (+ downmix blend). **Default `auto`** = batch (cheaper *and* higher-SNR on most clips), switching to tracked only on sustained movement |
+| 6 | Beamforming 8→1 | batch / tracked RTF-MVDR (+ downmix blend). **Default `auto`** = batch (cheaper *and* higher-SNR on most clips), switching to tracked only on sustained movement. **When `target_az` is set**: replaced by `extract_direction` — direction-masked MVDR that keeps the chosen talker and nulls the rest (competitive spectral post-filter adds low-frequency rejection). Interferer azimuths are detected automatically or supplied from `/api/speakers` |
 | 7 | AEC (far-end ref) | **partitioned** multi-tap or single-tap NLMS (active only with a reference WAV) |
 | 7b | **Feedback / howl risk** | sustained-tone diagnostic (read-only) |
 | 8 | Noise reduction | DeepFilterNet3 (default 32 dB cap) / decision-directed Wiener / none |
@@ -119,6 +119,7 @@ real-time spot).
 
 | Control | Options | What it does |
 |---------|---------|--------------|
+| **Target speaker** | ⊕ Detect chip-picker | Scan the recording with SRP-PHAT (`/api/speakers`) → chip strip shows each detected direction. Click a chip to route stage [6] through `extract_direction` (direction-masked RTF-MVDR) — only that talker comes out. Click the active chip or × Clear to go back to normal. Target + interferer azimuths are passed automatically so the pipeline skips the re-detection. **Accuracy note:** on the 40 mm array this isolates **outer talkers cleanly (~+13–15 dB) but a talker flanked on both sides only ~+2–5 dB** — the array's angular-resolution floor. Detected angles also carry a ~10° inward bias, but extraction tolerates a few degrees so picking the nearest chip still works. |
 | **Preset** | **Quality** · Fast · Custom | one-click profiles. **Quality** (default) = the full DFN3 chain below, output unchanged. **Fast** = lowest runtime (`nr=fast`, `beam=batch` so the movement detectors are skipped, `mask=coherence`, lighter residual) — **~0.33× real-time vs ~0.44× for Quality**. Touching any knob flips to Custom |
 | Noise reduction | DeepFilterNet3 · fast (dd-Wiener) · none | stage 8 engine (DFN3 capped at 32 dB). **Default DFN3** |
 | Denoise strength | 0 … 1 slider (default 0.6) | stage 8c residual mop-up — 0 = off, ~0.3 gentle, 0.6 natural, 1.0 near-silent bed |

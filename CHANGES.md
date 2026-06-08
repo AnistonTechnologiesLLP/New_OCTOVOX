@@ -1,5 +1,79 @@
 # Changelog
 
+## 2026-06-06 — Target-speaker selection ("whose voice?")
+
+Multi-talker recordings now have a speaker picker. Click **⊕ Detect** in the
+Console controls to scan the recording with SRP-PHAT and get a chip strip of
+detected talker directions; click a chip to extract that voice in the next run.
+
+- **`detect_talker_directions`** (new in `prod_pipeline.py`): speech-weighted
+  SRP-PHAT azimuth spectrum → greedy peak-pick with `min_sep` angular gate and
+  `min_activity` sidelobe rejection → `{speakers:[{az, strength, activity}],
+  spectrum:{az, power}}`. Always returns the full schema (even on silence, the
+  early-exit paths now include `n_speakers:0, speakers:[], spectrum:{}`).
+- **`extract_direction`** (new in `prod_pipeline.py`): direction-masked RTF-MVDR
+  steered at `target_az`. PHAT-whitened coherent power builds a competitive mask
+  `share = align_tgt^sharp / (align_tgt^sharp + Σ align_interf^sharp)` — the
+  competitive ratio vs. the other detected talkers is what isolates a flanked
+  speaker the small array can't null spatially. A directional post-filter
+  (`G = clip(share, floor, 1)`, smoothed in freq×time) adds the low-frequency
+  rejection that the MVDR spatial null misses. **Measured end-to-end isolation
+  (detected angles, not oracle): outer talkers +13…+15 dB; a talker flanked on
+  both sides +2…+5 dB** — see the accuracy note below.
+- **`/api/speakers`** (new endpoint, `api.py`): `POST {"filename": "…"}` → runs
+  `detect_talker_directions`, returns speaker list + azimuth spectrum (elapsed
+  ~0.5–1 s, no pipeline run needed).
+- **`/api/clean`** gains two new body params: `target_az` (float, degrees) and
+  `interferer_az` (list of floats). When `target_az` is set, `run_production`
+  routes stage [6] through `extract_direction`. When `interferer_az` is also
+  supplied (from a prior `/api/speakers` call), the pipeline skips its own
+  re-detection. Ignored when `target_az` is null (default behaviour unchanged).
+- **`run_production`** gains `target_az=None`, `interferer_az=None` params. When
+  set, `beam`, `mask`, and `mvdr_blend` are bypassed — the downmix blend would
+  re-introduce the other voices.
+- **UI** (`index.html`, `app.js`, `style.css`): **Target speaker** control with
+  ⊕ Detect button, speaker chips (direction + strength bar), a small top-down
+  azimuth radar canvas (detected speakers shown as dots, active target in teal),
+  and a × Clear toggle. `getProdOpts()` passes `target_az`/`interferer_az` when
+  a chip is selected; `state.selectedFile` tracks the last touched file so Detect
+  works before the first clean run.
+- **Tests**: 5 new tests in `test_prod_ports.py` (schema/silence, single-source,
+  two-source, mono-beam return, fallback-on-mono). Full suite: **47 passing**.
+
+### 2026-06-08 — accuracy pass (user: "angles are off when listening")
+
+A disjoint-window isolation harness (10·log10 of target-window / other-window
+energy) pinned down what's real and what isn't:
+
+- **Detection has a ~10° inward (toward-centre) bias** on the 40 mm UCA for
+  multi-source clips (true `[-60,0,70]` → detected `[-50,-10,60]`). The raw 1°
+  SRP-PHAT argmax is exact for a *single* source — the bias is the peak-picker on
+  the smoothed spectrum, where neighbouring talkers inflate each peak's inner
+  flank. Extraction tolerates this (±10° target-steer ≈ ±1–2 dB), so it costs a
+  little, not a lot.
+- **Two "fixes" were tried and rejected for regressing the realistic path**: a
+  raw-power azimuth *refinement* (maximises total overlapping power → lands
+  *between* close sources, `[-40,-5,35]`→`[-24,-10,14]`), and geometric
+  *null-steering* (injecting interferer `d·dᴴ` into Φ_v). Null-steering is huge
+  with oracle angles (+0.8→+4 dB middle, +2→+25 dB outer) but with the biased
+  detector its mis-located nulls fold onto the target and **collapse the flanked
+  talker to −8 dB** — so it's gone. The data-driven masked MVDR stays the engine
+  because it learns the interferer subspace from data, not geometry.
+- **Shipped**: `extract_direction` default `sharp` **2.0 → 3.0** (sharper
+  directional contrast) — the one robust, no-regression win (+0.4…+1.0 dB on
+  separated talkers; `sharp≥4` overshoots and tanks the middle talker).
+- **Front/back wrap fix** in `app.js`: angular separation now normalises JS's
+  signed modulo (`azSep`), so a ±180° boundary pair reads 5° not 355°.
+- **Per-file selection**: the picked azimuth is tied to its file
+  (`resetSpeakersForFile`); switching files or running "Clean all" drops it so one
+  recording's angle can't bleed into another.
+
+**Bottom line**: outer talkers isolate cleanly; the middle-of-three is the
+angular-resolution floor of a 40 mm array, and the real levers are a larger array
+or manual fine-azimuth entry — not more DSP on this geometry.
+
+---
+
 ## 2026-06-06 — CPU efficiency pass: faster *and* better defaults
 
 A runtime/quality pass on the production path. The headline: the live default

@@ -500,6 +500,228 @@ def beamform_masked(y, sr, mask_mode="snr", blend=0.9):
 
 
 # =========================================================================
+#  [6·who]  TARGET-SPEAKER SELECTION  — detect talkers, extract one by direction
+# =========================================================================
+#  A multi-talker recording on the 8-mic array carries each person at a
+#  different DIRECTION (azimuth). These two functions turn that into a
+#  "whose voice?" picker:
+#    · detect_talker_directions() scans azimuth and returns the active talker
+#      angles (peaks of a speech-weighted SRP-PHAT spatial spectrum), and
+#    · extract_direction() steers a direction-masked RTF-MVDR at ONE chosen
+#      azimuth — the target's direction builds the speech covariance, every
+#      other direction (the other talkers + diffuse noise) builds the noise
+#      covariance, so the beam keeps the chosen person and nulls the rest.
+#  Both reuse the instrument's covariance / RTF / MVDR primitives wholesale.
+#
+#  Geometry note: people seated around a table are ~in-plane, so detection and
+#  extraction fix elevation at 0° and scan azimuth only (the small UCA resolves
+#  azimuth far better than elevation). The UCA's front/back ±180° ambiguity
+#  (see track_doa) means a front/back MIRROR pair of talkers can share an
+#  apparent angle — fine for people on one side of the array, ambiguous when
+#  they fully surround it.
+# =========================================================================
+def _az_unit(az_deg, el_deg=0.0):
+    """Unit propagation direction for an (azimuth, elevation) in degrees."""
+    az, el = np.deg2rad(az_deg), np.deg2rad(el_deg)
+    return np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+
+
+def _directional_response(X, sv, band):
+    """Per-TF coherent power of the array toward a steering vector, PHAT-weighted.
+
+    ``X`` is ``(F,T,D)``; ``sv`` is ``(F,D)`` (unit-magnitude plane-wave steering);
+    ``band`` is a boolean ``(F,)`` speech-band mask. Returns ``align (F,T)`` in
+    [0,1] — how strongly each time-frequency unit looks like a single source from
+    the steered direction (1 = perfectly aligned, 0 = diffuse / other direction).
+    PHAT normalization (divide by |X|) makes it amplitude-blind, so a loud bin
+    from another talker doesn't dominate the geometry test.
+    """
+    Xp = X / (np.abs(X) + EPS)                          # (F,T,D) PHAT-whitened
+    # coherent sum over mics: Σ_d conj(sv) · Xp  → (F,T)
+    num = np.abs(np.einsum("fd,ftd->ft", np.conj(sv), Xp)) ** 2
+    align = num / (X.shape[2] ** 2)                     # |sv|=1 ⇒ max = D²
+    align = np.clip(align, 0.0, 1.0).astype(np.float32)
+    align[~band, :] = 0.0
+    return align
+
+
+def detect_talker_directions(y, fs, mic_pos, az_step=5.0, n_max=4,
+                             min_sep_deg=25.0, rel_thresh=0.45,
+                             min_activity=0.04, fmin=200.0, fmax=4000.0):
+    """Auto-detect the active talker directions on the array.
+
+    Builds a speech-weighted SRP-PHAT *azimuth spectrum* — for every candidate
+    angle, the speech-band coherent power steered that way, summed over the speech
+    time-frequency units (Silero/energy soft-mask weighted) — then peak-picks it
+    into a short list of talker directions. Each speaker is the centre of a
+    spatial-spectrum peak that clears ``rel_thresh`` of the global max and sits at
+    least ``min_sep_deg`` from a stronger peak.
+
+    ``y`` is ``(D, samples)``. Returns a dict:
+    ``{ran, speakers:[{az, strength, activity}], spectrum:{az:[…], power:[…]}}``
+    where ``strength`` is the peak's normalized height (1 = the strongest talker)
+    and ``activity`` is the fraction of speech frames that direction dominates.
+    Degrades to ``{ran:False}`` on single-channel input or any failure.
+    """
+    _empty = {"ran": False, "n_speakers": 0, "speakers": [],
+               "spectrum": {"az": [], "power": []}}
+    from . import pipeline as ov
+    try:
+        D, n = y.shape
+        if D < 2:
+            return {**_empty, "reason": "single channel — no spatial info"}
+        X = ov.stft_multich(np.ascontiguousarray(y.T))     # (F,T,D)
+        F, T, _ = X.shape
+        soft = ov.estimate_softmask(X)                      # (F,T) speech weight
+        freqs = np.fft.rfftfreq(ov.NFFT, 1.0 / fs)
+        band = (freqs >= fmin) & (freqs <= fmax)
+        if band.sum() < 4:
+            band = np.ones_like(freqs, dtype=bool)
+        az_grid = np.arange(-180.0, 180.0, az_step)
+        # Spatial spectrum P(az) = Σ_TF speech_weight · directional_response(az),
+        # plus a per-frame winner tally so we can report each talker's "activity".
+        P = np.zeros(len(az_grid), dtype=np.float64)
+        frame_resp = np.empty((len(az_grid), T), dtype=np.float32)
+        for i, az in enumerate(az_grid):
+            sv = ov.steering_vector(_az_unit(az), fs, ov.NFFT, mic_pos)   # (F,D)
+            align = _directional_response(X, sv, band)      # (F,T)
+            wresp = align * soft                            # weight by speech
+            frame_resp[i] = wresp.sum(axis=0)
+            P[i] = float(wresp.sum())
+        if P.max() <= EPS:
+            return {**_empty, "reason": "no directional speech energy"}
+        # Circular-smooth the azimuth spectrum (it wraps at ±180) to suppress the
+        # jagged sidelobes a small array produces, then re-normalize.
+        ksm = 3
+        Ps = np.array([P[(np.arange(i - ksm, i + ksm + 1)) % len(P)].mean()
+                       for i in range(len(P))])
+        Pn = Ps / Ps.max()
+        # Per-frame dominant azimuth → activity share per candidate angle.
+        winner = frame_resp.argmax(axis=0)                  # (T,) az-index per frame
+        speech_fr = soft.sum(axis=0) >= np.quantile(soft.sum(axis=0), 0.5)
+        # Peak-pick Pn: strict LOCAL maxima ≥ rel_thresh, greedily enforce a
+        # minimum angular separation (circular). A candidate must also clear a
+        # minimum speech-frame ACTIVITY so spatial sidelobes (high spectrum power
+        # but never the per-frame winner) are rejected — only directions a talker
+        # actually dominates for part of the clip survive.
+        # Greedy by descending spectrum power: the strongest angle is taken first,
+        # then every angle within ``min_sep_deg`` of an already-chosen one is
+        # skipped (so one peak yields one talker — this de-duplicates without a
+        # separate local-max test). A candidate must also clear ``rel_thresh`` of
+        # the global max AND a minimum speech-frame ACTIVITY, which rejects spatial
+        # sidelobes (high spectrum power but never the per-frame winner).
+        order = np.argsort(Pn)[::-1]
+        chosen = []
+        for idx in order:
+            if Pn[idx] < rel_thresh:
+                break
+            az = az_grid[idx]
+            if any(abs((az - az_grid[c] + 180) % 360 - 180) < min_sep_deg for c in chosen):
+                continue
+            ang = np.abs((az_grid[winner] - az + 180) % 360 - 180)
+            act = float(((ang <= min_sep_deg / 2.0) & speech_fr).sum() / max(speech_fr.sum(), 1))
+            if act < min_activity:
+                continue                                    # sidelobe, not a talker
+            chosen.append(idx)
+            if len(chosen) >= n_max:
+                break
+        chosen.sort(key=lambda c: az_grid[c])
+        speakers = []
+        for c in chosen:
+            ang = np.abs((az_grid[winner] - az_grid[c] + 180) % 360 - 180)
+            act = float(((ang <= min_sep_deg / 2.0) & speech_fr).sum() / max(speech_fr.sum(), 1))
+            speakers.append({"az": int(round(az_grid[c])),
+                             "strength": round(float(Pn[c]), 3),
+                             "activity": round(act, 3)})
+        return {"ran": True, "n_speakers": len(speakers), "speakers": speakers,
+                "spectrum": {"az": [int(a) for a in az_grid],
+                             "power": [round(float(v), 4) for v in Pn]}}
+    except Exception as e:
+        return {**_empty, "reason": f"error: {e}"}
+
+
+def extract_direction(y, fs, mic_pos, az_deg, el_deg=0.0, interferer_az=(),
+                      sharp=3.0, postmask_db=-18.0, smooth=(3, 3)):
+    """Extract the talker at one azimuth with a direction-masked RTF-MVDR.
+
+    Steers the array at ``az_deg`` (elevation ``el_deg``, default in-plane) and
+    builds the speech covariance from the time-frequency units whose spatial
+    signature MATCHES that direction, while EVERY OTHER direction — the other
+    talkers and diffuse noise — falls into the noise covariance ``(1 − mask)``.
+    The resulting RTF-MVDR keeps the chosen person and nulls the rest. Reuses
+    ``compute_csm_masked`` / ``estimate_rtf`` / ``bf_mvdr`` / ``apply_beamformer``
+    so it is the same validated math as the batch beam, only the MASK is
+    direction-defined instead of energy-defined.
+
+    ``interferer_az`` — the OTHER detected talker azimuths. When supplied the mask
+    is COMPETITIVE: a T-F unit is assigned to the target only when the target
+    direction beats every interferer there, ``align_tgt / (align_tgt + Σ
+    align_interf)``. This is what isolates a talker flanked by others — a small
+    array has poor low-frequency angular resolution, so an *absolute* directional
+    mask leaks the neighbours' low-band energy; the competitive ratio removes it.
+
+    ``y`` is ``(D, samples)``; returns the extracted mono ``(samples,)`` float32.
+    Falls back to the array downmix on any failure (never silent).
+    """
+    from . import pipeline as ov
+    D, n = y.shape
+    if D == 1:
+        return y[0].astype(np.float32)
+    try:
+        X = ov.stft_multich(np.ascontiguousarray(y.T))     # (F,T,D)
+        freqs = np.fft.rfftfreq(ov.NFFT, 1.0 / fs)
+        band = (freqs >= 150.0) & (freqs <= 6000.0)
+        if band.sum() < 4:
+            band = np.ones_like(freqs, dtype=bool)
+        sv = ov.steering_vector(_az_unit(az_deg, el_deg), fs, ov.NFFT, mic_pos)
+        align_t = _directional_response(X, sv, band) ** sharp     # (F,T)
+        soft = ov.estimate_softmask(X)                            # (F,T) speech weight
+        # Competitive directional mask: target share of the aligned energy among
+        # {target} ∪ {interferers}. With no interferers it degrades to the plain
+        # sharpened directional mask (denominator = target alone + ε).
+        denom = align_t.copy()
+        for iaz in interferer_az:
+            if abs((float(iaz) - az_deg + 180) % 360 - 180) < 1.0:
+                continue                                          # skip self
+            svi = ov.steering_vector(_az_unit(float(iaz), el_deg), fs, ov.NFFT, mic_pos)
+            denom = denom + _directional_response(X, svi, band) ** sharp
+        share = align_t / (denom + EPS)                           # (F,T) in [0,1]
+        # Target mask: speech AND target-dominant direction. Clip away from {0,1}
+        # so both covariances are well-conditioned (1−mask is the noise weight).
+        M = np.clip(soft * share, 0.02, 0.98).astype(np.float32)
+        ref, _ = ov.pick_reference_channel(X, M)
+        phi_x, phi_v = ov.compute_csm_masked(X, M)
+        phi_x = ov.regularise(phi_x)
+        phi_v = ov.regularise(phi_v)
+        rtf = ov.estimate_rtf(phi_x, phi_v, ref=ref)
+        w = ov.bf_mvdr(rtf, phi_v)
+        beam = ov.apply_beamformer(X, w)                          # (F,T) spectrum
+        # Directional POST-FILTER. A small array nulls poorly at low frequencies
+        # (especially with interferers on opposite sides), so the spatial null
+        # alone can't fully isolate a flanked talker. Multiplying the beam by the
+        # competitive target share — floored at ``postmask_db`` to cap musical
+        # noise, lightly smoothed in freq×time — adds the missing rejection; the
+        # downstream DFN3 then cleans any residual warble. Set postmask_db=None
+        # to disable (pure spatial beam).
+        if postmask_db is not None:
+            gfloor = 10.0 ** (postmask_db / 20.0)
+            G = np.clip(share, gfloor, 1.0).astype(np.float32)
+            sf, st = smooth
+            if sf and sf > 1:
+                G = sps.fftconvolve(G, np.ones((sf, 1), np.float32) / sf, mode="same", axes=0)
+            if st and st > 1:
+                G = sps.fftconvolve(G, np.ones((1, st), np.float32) / st, mode="same", axes=1)
+            beam = beam * G
+        out = ov.istft_single(beam, n_out=n).astype(np.float32)
+        if out.size == 0 or not np.all(np.isfinite(out)):
+            raise ValueError("empty/non-finite extraction")
+        return out
+    except Exception as e:
+        print(f"[WARN] extract_direction({az_deg}°) failed: {e}")
+        return y.mean(axis=0)[:n].astype(np.float32)
+
+
+# =========================================================================
 #  [7]  AEC — frequency-domain NLMS with a far-end reference
 # =========================================================================
 def aec_nlms(mic, far_ref, fs, mu=0.3, leak=0.999):
@@ -1035,6 +1257,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
                    agc="rms", aec="partitioned", movement="rtf",
                    track="conditioned", dereverb=None, mask="auto",
                    residual=0.6, pause_floor_db=-40.0,
+                   target_az=None, interferer_az=None,
                    doa_readout=False, report=True, log=None):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
@@ -1127,6 +1350,19 @@ def run_production(input_path, out_dir, *, reference_path=None,
         Silence floor for the automix gate (stage [9]). The DEFAULT ``-40.0``
         (deepened from -24) pushes the noise in speech *pauses* well down so
         gaps go near-silent; raise toward -24 for a softer, less gated feel.
+    target_az : float | None
+        **Target-speaker selection (stage [6]).** When given an azimuth in degrees,
+        the beamformer is replaced by :func:`extract_direction` — a direction-masked
+        RTF-MVDR steered at ``target_az`` that keeps the talker in that direction and
+        nulls the others. This is the "whose voice?" picker for multi-talker
+        recordings; ``None`` (default) keeps the normal single-beam behaviour. When
+        set, ``beam``/``mask``/``mvdr_blend`` are bypassed (the downmix blend would
+        re-introduce the other talkers).
+    interferer_az : list[float] | None
+        The OTHER talker azimuths, used to make the target mask COMPETITIVE (see
+        :func:`extract_direction`). When ``target_az`` is set but this is ``None``,
+        the other directions are found automatically via
+        :func:`detect_talker_directions`. Ignored when ``target_az`` is ``None``.
     doa_readout : bool
         Whether to run the SRP-PHAT :func:`track_doa` azimuth READOUT (stage
         [5]). It is a *diagnostic* — on this UCA the azimuth is front/back
@@ -1299,7 +1535,23 @@ def run_production(input_path, out_dir, *, reference_path=None,
     #  movement="rtf" the RTF-drift signal IS trustworthy, so auto switches to the
     #  tracked beam when it reports SUSTAINED movement. beam="tracked"/"batch"
     #  force the choice regardless.
-    if beam == "tracked":
+    #  TARGET-SPEAKER MODE: when ``target_az`` is set, replace the beam with a
+    #  direction-masked extraction steered at that talker (and null the others).
+    target_mode = target_az is not None
+    interfs = []
+    if target_mode:
+        if interferer_az is None:
+            det = detect_talker_directions(
+                y_track if tc_info.get("ran") else y, sr, ov.POLARIS_UCA_M)
+            interfs = [s["az"] for s in det.get("speakers", [])
+                       if abs((s["az"] - float(target_az) + 180) % 360 - 180) >= 20]
+        else:
+            interfs = [a for a in interferer_az
+                       if abs((float(a) - float(target_az) + 180) % 360 - 180) >= 20]
+        chosen = None
+        method = "extract_direction"
+        use_masked = False
+    elif beam == "tracked":
         chosen = tracked_mvdr_beamform
     elif beam == "batch":
         chosen = batch_mvdr_beamform
@@ -1307,14 +1559,22 @@ def run_production(input_path, out_dir, *, reference_path=None,
         chosen = tracked_mvdr_beamform
     else:                                    # "auto"
         chosen = batch_mvdr_beamform
-    method = getattr(chosen, "__name__", "beamform")
-    # The spatial-coherence (ASA) mask only applies to the BATCH beam.
-    use_masked = (chosen is batch_mvdr_beamform) and (mask != "snr")
+    if not target_mode:
+        method = getattr(chosen, "__name__", "beamform")
+        # The spatial-coherence (ASA) mask only applies to the BATCH beam.
+        use_masked = (chosen is batch_mvdr_beamform) and (mask != "snr")
     mask_meta = {"mask": "snr"}
 
     def _beamform():
         nonlocal mask_meta
-        if use_masked:
+        if target_mode:
+            # Direction-extracted: keep the chosen talker, null the rest. No
+            # downmix blend — that would re-introduce the other voices.
+            mvdr = np.asarray(
+                extract_direction(y, sr, ov.POLARIS_UCA_M, float(target_az),
+                                  interferer_az=interfs),
+                dtype=np.float32).reshape(-1)
+        elif use_masked:
             mvdr_raw, mask_meta = beamform_masked(y, sr, mask_mode=mask)
             mvdr = np.asarray(mvdr_raw, dtype=np.float32).reshape(-1)
         else:
@@ -1324,7 +1584,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
         if len(mvdr) < n:
             mvdr = np.pad(mvdr, (0, n - len(mvdr)))
         mvdr = mvdr[:n]
-        if D > 1 and 0.0 < mvdr_blend < 1.0:
+        if (not target_mode) and D > 1 and 0.0 < mvdr_blend < 1.0:
             downmix = y.mean(axis=0)[:n].astype(np.float32)
             mvdr_n, _ = _peak_normalize(mvdr, target=1.0)
             dmix_n, _ = _peak_normalize(downmix, target=1.0)
@@ -1332,7 +1592,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
             note = f"MVDR×{mvdr_blend:.2f}+downmix×{1-mvdr_blend:.2f}"
         else:
             mono = mvdr
-            note = "pure MVDR"
+            note = f"target @{int(round(float(target_az)))}°" if target_mode else "pure MVDR"
         mono, gbf = _peak_normalize(mono)
         return mono, note, gbf
     try:
@@ -1341,8 +1601,12 @@ def run_production(input_path, out_dir, *, reference_path=None,
                               "moving_talker": bool(moved), "blend": blend_note,
                               "mask": mask, "mask_info": mask_meta,
                               "peak_norm_db": round(gbf, 1)}
-        _log(f"prod: beamform {method} 8→1 ({blend_note}) · mask={mask}"
-             + (f" → {mask_meta.get('picked')}" if mask_meta.get('mask') == 'auto' else ""))
+        if target_mode:
+            stages["beamform"].update({"target_az": int(round(float(target_az))),
+                                       "interferer_az": [int(a) for a in interfs]})
+        _log(f"prod: beamform {method} 8→1 ({blend_note})"
+             + (f" · nulling {interfs}" if target_mode else f" · mask={mask}"
+                + (f" → {mask_meta.get('picked')}" if mask_meta.get('mask') == 'auto' else "")))
     except Exception as e:
         mono = y.mean(axis=0)[:n].astype(np.float32)
         stages["beamform"] = {"ran": True, "method": "channel_mean_fallback", "reason": str(e)}
@@ -1475,7 +1739,8 @@ def run_production(input_path, out_dir, *, reference_path=None,
     #  it is OFF by default on the API hot path. ``report=True`` re-enables it.
     if report:
         from . import prod_report
-        params_str = (f"NR:{nr} · beam:{beam} · move:{movement} · AGC:{agc} · "
+        params_str = ((f"target@{int(round(float(target_az)))}° · " if target_az is not None else "")
+                      + f"NR:{nr} · beam:{beam} · move:{movement} · AGC:{agc} · "
                       f"AEC:{aec}" + (" · track" if track == "conditioned" else "")
                       + (f" · mask:{mask}" if mask != "snr" else "")
                       + (f" · derev:{dereverb}" if dereverb != "none" else "")

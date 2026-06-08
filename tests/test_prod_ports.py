@@ -17,6 +17,7 @@ from octovox_app.services.prod_pipeline import (
     mic_health_report, perceptual_agc, feedback_risk, aec_partitioned, rtf_drift,
     condition_tracking_path, track_doa, dereverb_spectral, dd_wiener,
     spatial_coherence, beamform_masked, residual_suppress,
+    detect_talker_directions, extract_direction,
 )
 from octovox_app.services import pipeline as _ov
 from octovox_app.services.pipeline import POLARIS_UCA_M, SPEED_SOUND
@@ -444,3 +445,65 @@ def test_beamform_masked_auto_picks_one_of_the_two():
     assert info["picked"] in ("snr", "coherent")
     ref = snr_mono if info["picked"] == "snr" else coh_mono
     np.testing.assert_allclose(auto_mono, ref, rtol=0, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+#  detect_talker_directions + extract_direction  (target-speaker selection)
+# ---------------------------------------------------------------------------
+
+def test_detect_talker_directions_schema():
+    """detect_talker_directions should return the expected schema on any input."""
+    y = np.zeros((8, FS * 2), dtype=np.float32)
+    result = detect_talker_directions(y, FS, POLARIS_UCA_M)
+    assert "ran" in result
+    assert "n_speakers" in result
+    assert "speakers" in result
+    assert "spectrum" in result
+    assert isinstance(result["speakers"], list)
+    assert isinstance(result["n_speakers"], int)
+
+
+def test_detect_talker_directions_finds_directional_source():
+    """A clear plane-wave source should produce at least one speaker peak."""
+    src = _speech_like(3 * FS, seed=60)
+    y = _planewave_8ch(src, az_deg=45.0).astype(np.float32)
+    result = detect_talker_directions(y, FS, POLARIS_UCA_M, min_activity=0.02)
+    assert result["ran"]
+    assert result["n_speakers"] >= 1, f"Expected >=1 speaker, got {result['n_speakers']}"
+    # Spectrum should be populated
+    spec = result.get("spectrum", {})
+    assert len(spec.get("az", [])) > 0 and len(spec.get("power", [])) > 0
+
+
+def test_detect_talker_directions_two_sources():
+    """Two well-separated sources should yield at least one detected direction."""
+    src1 = _speech_like(3 * FS, seed=61)
+    src2 = _speech_like(3 * FS, seed=62)
+    y = (_planewave_8ch(src1, az_deg=-60.0) +
+         _planewave_8ch(src2, az_deg=60.0)).astype(np.float32)
+    result = detect_talker_directions(y, FS, POLARIS_UCA_M, min_activity=0.01)
+    assert result["ran"]
+    # With front/back ambiguity and a small array at least 1 direction is found;
+    # the UCA may also surface the mirror directions — both are expected behaviour.
+    assert result["n_speakers"] >= 1
+
+
+def test_extract_direction_returns_mono_beam():
+    """extract_direction should return a finite 1-D float32 array."""
+    src1 = _speech_like(3 * FS, seed=63)
+    src2 = _speech_like(3 * FS, seed=64)
+    y = (_planewave_8ch(src1, az_deg=-60.0) +
+         _planewave_8ch(src2, az_deg=60.0)).astype(np.float32)
+    out = extract_direction(y, FS, POLARIS_UCA_M, az_deg=-60.0, interferer_az=[60.0])
+    assert out.ndim == 1
+    assert len(out) > 0
+    assert np.all(np.isfinite(out)), "extract_direction returned non-finite samples"
+    assert float(np.max(np.abs(out))) > 1e-5, "extract_direction output is silence"
+
+
+def test_extract_direction_fallback_on_mono_input():
+    """extract_direction should not crash and return something on a 1-ch input."""
+    src = _speech_like(FS, seed=65).reshape(1, -1).astype(np.float32)
+    out = extract_direction(src, FS, POLARIS_UCA_M[:1], az_deg=0.0)
+    assert out.ndim == 1
+    assert np.all(np.isfinite(out))

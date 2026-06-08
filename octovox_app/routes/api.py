@@ -568,6 +568,15 @@ def clean_voice():
                    opt-in; when false ``report`` in the response is null.
       · ``doa_readout`` : bool (default false) — run the SRP-PHAT azimuth readout
                    (diagnostic only; never steers the beam on this UCA).
+      · ``target_az`` : float | null (default null) — target-speaker azimuth in
+                   degrees. When set, stage [6] is replaced by
+                   ``extract_direction`` — a direction-masked RTF-MVDR that keeps
+                   the talker at ``target_az`` and nulls all others. Obtain
+                   candidate azimuths from ``/api/speakers``.
+      · ``interferer_az`` : list[float] | null — the OTHER detected talker azimuths
+                   (from ``/api/speakers``). When ``target_az`` is set but this is
+                   null the pipeline auto-detects them (adds ~0.5 s). Ignored when
+                   ``target_az`` is null.
     """
     data = request.get_json(force=True, silent=True) or {}
     fname = data.get("filename")
@@ -632,6 +641,24 @@ def clean_voice():
     # SRP-PHAT azimuth readout (diagnostic only — never drives the beam on this
     # UCA). Default off; it auto-runs when the auto decision actually needs it.
     doa_readout = bool(data.get("doa_readout", False))
+    # Target-speaker selection: when set, routes stage [6] through extract_direction
+    # (direction-masked RTF-MVDR) steered at this azimuth.  When only target_az is
+    # given, interferers are auto-detected inside the pipeline; pass interferer_az
+    # from a prior /api/speakers call to skip the re-detection.
+    target_az = None
+    raw_taz = data.get("target_az")
+    if raw_taz is not None:
+        try:
+            target_az = float(raw_taz)
+        except (TypeError, ValueError):
+            target_az = None
+    interferer_az = None
+    raw_iaz = data.get("interferer_az")
+    if raw_iaz is not None:
+        try:
+            interferer_az = [float(a) for a in raw_iaz]
+        except (TypeError, ValueError):
+            interferer_az = None
     # Optional far-end reference for stage [7] AEC (else AEC is a clean skip).
     ref_path = None
     ref_name = data.get("reference")
@@ -647,6 +674,7 @@ def clean_voice():
             mvdr_blend=mvdr_blend, wpe=wpe, dereverb=dereverb, eq=eq,
             agc=agc, aec=aec, movement=movement, track=track, mask=mask,
             residual=residual, pause_floor_db=pause_floor_db,
+            target_az=target_az, interferer_az=interferer_az,
             doa_readout=doa_readout, report=report)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
@@ -662,6 +690,41 @@ def clean_voice():
                        sr=result["sr"],
                        n_channels=result["n_channels"],
                        elapsed_s=result["elapsed_s"])
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@api_bp.route("/speakers", methods=["POST"])
+def detect_speakers():
+    """Detect talker directions in a multi-speaker recording (SRP-PHAT).
+
+    Body: ``{"filename": "<input.wav>"}``.
+    Returns ``{ok, ran, n_speakers, speakers:[{az, strength, activity}],
+    spectrum:{az, power}, elapsed_s}``.  Each speaker has an ``az`` in degrees,
+    a relative ``strength`` (0–1), and a speech ``activity`` fraction (0–1).
+    Pass the returned ``az`` values as ``target_az`` + ``interferer_az`` to
+    ``/api/clean`` to extract one talker from the mix.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    fname = data.get("filename")
+    if not fname:
+        return jsonify(ok=False, error="filename required"), 400
+    wav_path = INPUT_DIR / secure_filename(fname)
+    if not wav_path.exists():
+        return jsonify(ok=False, error=f"file not found: {fname}"), 404
+    try:
+        t0 = time.time()
+        # Same loader the production path uses → (D, samples) float32 in [-1, 1],
+        # so detected directions line up with what the clean run will beamform.
+        y, sr = cascade._load_multichannel(wav_path)
+        result = prod.detect_talker_directions(y, sr, ov.POLARIS_UCA_M)
+        elapsed = round(time.time() - t0, 3)
+        return jsonify(ok=True, elapsed_s=elapsed,
+                       ran=result.get("ran", False),
+                       n_speakers=result.get("n_speakers", 0),
+                       speakers=result.get("speakers", []),
+                       spectrum=result.get("spectrum", {}))
     except Exception as e:
         traceback.print_exc()
         return jsonify(ok=False, error=str(e)), 500

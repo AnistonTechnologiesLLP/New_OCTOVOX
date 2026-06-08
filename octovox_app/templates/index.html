@@ -259,6 +259,15 @@
         <label class="ctl ctl-chk"><input type="checkbox" id="prodTrack" checked><span>Noise-robust tracking</span></label>
         <label class="ctl ctl-chk"><input type="checkbox" id="prodEq" checked><span>EQ</span></label>
         <label class="ctl ctl-chk"><input type="checkbox" id="prodReport"><span>Generate report</span></label>
+        <div class="ctl ctl-speaker">
+          <div class="ctl-lab-row">
+            <span class="ctl-lab">Target speaker</span>
+            <button class="btn btn-ghost btn-xs" id="detectSpeakersBtn" title="Scan recording for talker directions (SRP-PHAT)">⊕ Detect</button>
+            <button class="btn btn-ghost btn-xs hidden" id="clearSpeakerBtn" title="Remove speaker filter — process all voices">× Clear</button>
+          </div>
+          <div id="speakerChips" class="speaker-chips"></div>
+          <canvas id="azRadar" class="az-radar hidden" width="256" height="128"></canvas>
+        </div>
       </div>
       <div class="cs-actions">
         <button class="btn btn-primary" id="rerunProdBtn">↻ Re-run</button>

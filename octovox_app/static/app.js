@@ -37,6 +37,11 @@ const state = {
   wsWinner: null,
   bpFreq: "mid",
   recording: false,
+  selectedFile: null,       // last file selected for processing / detect
+  targetAz: null,           // speaker azimuth to extract (null = all voices)
+  interfererAz: null,       // other detected azimuths (passed with targetAz)
+  detectedSpeakers: [],     // last result from /api/speakers
+  speakersFile: null,       // filename the current speaker list belongs to
 };
 
 
@@ -806,6 +811,7 @@ function renderFilesList(files, wMap) {
     row.querySelector('[data-action="analyse"]').addEventListener("click", async e => {
       e.stopPropagation();
       const btn = e.currentTarget;
+      state.selectedFile = fname;
       if (state.filesWMap[stem]) { await showResults(stem); return; }
       btn.setAttribute("data-state", "running");
       const origText = btn.textContent;
@@ -959,6 +965,15 @@ async function runAllFiles() {
     return;
   }
 
+  // Target-speaker extraction is a single-file, interactive choice; a batch run
+  // must not apply one file's azimuth to every recording. Drop it up front so
+  // the result is order-independent.
+  state.targetAz = null;
+  state.interfererAz = null;
+  state.detectedSpeakers = [];
+  state.speakersFile = null;
+  renderSpeakerChips([]);
+
   state.runningAll = true;
   const btn = $("runAllBtn");
   const origText = btn.textContent;
@@ -1045,6 +1060,168 @@ async function clearAllOutput() {
 
 /* ═══════════════════ RESULTS (production) ═══════════════════ */
 
+
+/* ── Speaker detection ────────────────────────────────────────────────────── */
+
+/** Smallest absolute angular separation (degrees) between two azimuths, correct
+ *  across the ±180° wrap. JS `%` can return negatives, so normalise to [0,360)
+ *  before folding to [-180,180) — otherwise boundary pairs (e.g. -180 vs 175,
+ *  which the UCA's front/back ambiguity produces) read as ~355° instead of 5°. */
+function azSep(a, b) {
+  const d = (((a - b + 180) % 360) + 360) % 360 - 180;
+  return Math.abs(d);
+}
+
+/** Call /api/speakers on the current file and populate the speaker chips. */
+async function detectSpeakers(filename) {
+  if (!filename) { toast("Select or clean a file first, then detect speakers.", "warn"); return; }
+  const btn = $("detectSpeakersBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "⌛…"; }
+  try {
+    const r = await fetch("/api/speakers", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "speaker detect failed");
+    state.detectedSpeakers = j.speakers || [];
+    state.speakersFile = filename;
+    renderSpeakerChips(state.detectedSpeakers);
+    drawAzRadar(state.detectedSpeakers, state.targetAz);
+    const n = state.detectedSpeakers.length;
+    toast(n > 0
+      ? `Found ${n} talker direction${n > 1 ? "s" : ""} — pick one below to extract it.`
+      : "No distinct speaker directions found (may be single-speaker or reverberant).",
+      n > 0 ? "ok" : "warn");
+  } catch (err) {
+    toast(`Speaker detect failed: ${err.message}`, "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "⊕ Detect"; }
+  }
+}
+
+/** Render speaker direction chips from a speakers array. */
+function renderSpeakerChips(speakers) {
+  const wrap = $("speakerChips");
+  const radar = $("azRadar");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!speakers || speakers.length === 0) {
+    wrap.innerHTML = '<span class="speaker-empty">No speakers detected — click ⊕ Detect.</span>';
+    if (radar) radar.classList.add("hidden");
+    const clearBtn = $("clearSpeakerBtn");
+    if (clearBtn) clearBtn.classList.add("hidden");
+    return;
+  }
+  speakers.forEach(sp => {
+    const az = Math.round(sp.az);
+    const strength = Math.round((sp.strength || 0) * 100);
+    const activity = Math.round((sp.activity || 0) * 100);
+    const isActive = state.targetAz != null && azSep(sp.az, state.targetAz) < 1.0;
+    const chip = document.createElement("button");
+    chip.className = "speaker-chip" + (isActive ? " active" : "");
+    chip.dataset.az = sp.az;
+    chip.title = `Azimuth ${az > 0 ? "+" : ""}${az}° · strength ${strength}% · activity ${activity}%`;
+    chip.innerHTML =
+      `<span class="sc-dir">${az > 0 ? "+" : ""}${az}°</span>` +
+      `<span class="sc-bar"><span class="sc-fill" style="width:${strength}%"></span></span>`;
+    chip.addEventListener("click", () => {
+      if (isActive) {
+        clearSpeakerSelection();
+      } else {
+        selectSpeaker(sp.az, speakers);
+      }
+    });
+    wrap.appendChild(chip);
+  });
+  if (radar) radar.classList.remove("hidden");
+  drawAzRadar(speakers, state.targetAz);
+  const clearBtn = $("clearSpeakerBtn");
+  if (clearBtn) clearBtn.classList.toggle("hidden", state.targetAz == null);
+}
+
+/** Mark one azimuth as the extraction target; all others become interferers. */
+function selectSpeaker(az, speakers) {
+  state.targetAz = az;
+  state.interfererAz = (speakers || state.detectedSpeakers)
+    .map(s => s.az)
+    .filter(a => azSep(a, az) >= 20);
+  renderSpeakerChips(state.detectedSpeakers);
+  drawAzRadar(state.detectedSpeakers, state.targetAz);
+  const clearBtn = $("clearSpeakerBtn");
+  if (clearBtn) clearBtn.classList.remove("hidden");
+  const label = `${az > 0 ? "+" : ""}${Math.round(az)}°`;
+  toast(`Will extract speaker at ${label} on next run — click ↻ Re-run or analyse a file.`, "ok");
+}
+
+/** Remove the speaker filter — next run will process all voices. */
+function clearSpeakerSelection() {
+  state.targetAz = null;
+  state.interfererAz = null;
+  renderSpeakerChips(state.detectedSpeakers);
+  drawAzRadar(state.detectedSpeakers, null);
+  const clearBtn = $("clearSpeakerBtn");
+  if (clearBtn) clearBtn.classList.add("hidden");
+  toast("Speaker filter cleared — all voices will be processed.", "ok");
+}
+
+/** Drop the speaker selection + chips when we move to a different file — a
+ *  target azimuth detected on one recording is meaningless for another. */
+function resetSpeakersForFile(filename) {
+  if (state.speakersFile === filename) return;   // same file → keep the picker
+  state.targetAz = null;
+  state.interfererAz = null;
+  state.detectedSpeakers = [];
+  state.speakersFile = null;
+  renderSpeakerChips([]);
+}
+
+/** Draw a top-down azimuth radar on the <canvas> showing detected speakers. */
+function drawAzRadar(speakers, targetAz) {
+  const canvas = $("azRadar");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+  const R = Math.min(cx, cy) - 10;
+  ctx.clearRect(0, 0, W, H);
+  // Background circle + grid
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+  ctx.strokeStyle = "#1d2a33"; ctx.lineWidth = 1; ctx.stroke();
+  for (let deg = 0; deg < 360; deg += 45) {
+    const rad = (deg - 90) * Math.PI / 180;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + R * Math.cos(rad), cy + R * Math.sin(rad));
+    ctx.strokeStyle = "#141e26"; ctx.lineWidth = 1; ctx.stroke();
+  }
+  // "F" label (front, 0°)
+  ctx.fillStyle = "#6f8090"; ctx.font = "9px JetBrains Mono, monospace";
+  ctx.textAlign = "center"; ctx.fillText("F", cx, cy - R - 3);
+  // Center dot (mic array)
+  ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+  ctx.fillStyle = "#334155"; ctx.fill();
+  // Draw each detected speaker
+  (speakers || []).forEach(sp => {
+    const isTarget = targetAz != null && azSep(sp.az, targetAz) < 1.0;
+    const rad = (sp.az - 90) * Math.PI / 180;
+    const r = R * (0.55 + 0.35 * (sp.strength || 0.5));
+    const x = cx + r * Math.cos(rad), y = cy + r * Math.sin(rad);
+    // Line from center
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
+    ctx.strokeStyle = isTarget ? "#2dd4bf" : "#334155";
+    ctx.lineWidth = isTarget ? 2 : 1; ctx.stroke();
+    // Dot
+    ctx.beginPath(); ctx.arc(x, y, isTarget ? 6 : 4, 0, 2 * Math.PI);
+    ctx.fillStyle = isTarget ? "#2dd4bf" : "#475569"; ctx.fill();
+    if (isTarget) {
+      ctx.beginPath(); ctx.arc(x, y, 9, 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(45,212,191,0.3)"; ctx.lineWidth = 2; ctx.stroke();
+    }
+  });
+}
+
+
 /* Preset → knob values. "quality" = the full-quality defaults (unchanged
  * output); "fast" = the low-runtime profile (no neural NR, single-beam coherent
  * mask, lighter residual). "custom" leaves whatever the user set. */
@@ -1096,11 +1273,19 @@ function setupProdControls() {
       });
     });
   }
+  // Speaker detection + clear buttons
+  const detectBtn = $("detectSpeakersBtn");
+  if (detectBtn) detectBtn.addEventListener("click", () => {
+    const fname = state.selectedFile || (state.currentStem ? `${state.currentStem}.wav` : null);
+    detectSpeakers(fname);
+  });
+  const clearSpBtn = $("clearSpeakerBtn");
+  if (clearSpBtn) clearSpBtn.addEventListener("click", () => clearSpeakerSelection());
 }
 
 /** Read the current pipeline control knobs from the results panel. */
 function getProdOpts() {
-  return {
+  const opts = {
     nr:   ($("prodNr")   || {}).value || "fast",
     beam: ($("prodBeam") || {}).value || "auto",
     agc:  ($("prodAgc")  || {}).value || "perceptual",
@@ -1113,6 +1298,14 @@ function getProdOpts() {
     eq:    ($("prodEq") ? $("prodEq").checked : true),
     report: ($("prodReport") ? $("prodReport").checked : false),
   };
+  // Target-speaker extraction: pass when a speaker is selected via the chip UI.
+  if (state.targetAz != null) {
+    opts.target_az = state.targetAz;
+    if (state.interfererAz != null && state.interfererAz.length > 0) {
+      opts.interferer_az = state.interfererAz;
+    }
+  }
+  return opts;
 }
 
 /**
@@ -1123,6 +1316,10 @@ function getProdOpts() {
 async function runProduction(filename) {
   if (!filename) { toast("runProduction called with no filename.", "error"); return false; }
   if (!Busy.acquire(`cleaning ${filename}`)) return false;
+  // A speaker azimuth detected on a different recording must not bleed into this
+  // run — reset the picker unless it belongs to the file we're about to clean.
+  resetSpeakersForFile(filename);
+  state.selectedFile = filename;
   const opts = getProdOpts();
   showProgress(`Cleaning voice (${opts.nr})…`);
   try {
