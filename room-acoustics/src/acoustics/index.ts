@@ -34,6 +34,9 @@ export {
   absorptionByBand,
   eyring,
   sabine,
+  compareRT60,
+  type MeasuredRT60Point,
+  type RT60Comparison,
 } from './rt60';
 
 export {

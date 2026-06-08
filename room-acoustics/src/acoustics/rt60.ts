@@ -155,3 +155,44 @@ export function sabine(
     rt60: (SABINE_CONSTANT * V) / (A[i] ?? 0),
   }));
 }
+
+/** A measured RT60 value per band; `rt60` is `null` when no estimate was possible. */
+export interface MeasuredRT60Point {
+  readonly band: number;
+  readonly rt60: number | null;
+}
+
+/** Predicted vs measured RT60 at one band. `measured`/`deltaSec` are `null` when unmeasured. */
+export interface RT60Comparison {
+  readonly band: number;
+  readonly predicted: number;
+  readonly measured: number | null;
+  /** `measured − predicted`, in seconds (`null` when unmeasured). */
+  readonly deltaSec: number | null;
+}
+
+/**
+ * Align a predicted RT60 curve with a measured one, band by band.
+ *
+ * Pure — the measured values come from elsewhere (e.g. an analysed recording);
+ * this only joins the two by band and computes the per-band difference.
+ *
+ * @param predicted - Predicted RT60 per band (from {@link eyring}/{@link sabine}).
+ * @param measured - Measured RT60 per band (any band may be `null`).
+ * @returns One {@link RT60Comparison} per predicted band, in predicted order.
+ */
+export function compareRT60(
+  predicted: readonly RT60Point[],
+  measured: readonly MeasuredRT60Point[],
+): RT60Comparison[] {
+  const measuredByBand = new Map<number, number | null>(measured.map((m) => [m.band, m.rt60]));
+  return predicted.map((p) => {
+    const m = measuredByBand.has(p.band) ? (measuredByBand.get(p.band) ?? null) : null;
+    return {
+      band: p.band,
+      predicted: p.rt60,
+      measured: m,
+      deltaSec: m === null ? null : m - p.rt60,
+    };
+  });
+}

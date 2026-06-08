@@ -33,6 +33,17 @@ without a build step — **re-run `npm run build` after changing anything here**
 to refresh it. The dev server (`npm run dev`) runs under the same `base`, i.e.
 `http://localhost:5173/static/acoustics/`.
 
+### Measured-vs-predicted bridge
+
+When served inside OCTOVOX, the RT60 chart gains a *Compare with a recording*
+control: it lists OCTOVOX input files (`GET /api/list_input`), and **Measure
+RT60** calls `POST /api/rt60` to blind-estimate the room's *measured* RT60 from
+that recording (free-decay Schroeder, server-side). The measured curve is
+overlaid on the predicted bars and `compareRT60` drives a per-band delta strip.
+This panel **auto-hides when those endpoints aren't reachable** (standalone dev),
+so the engine and UI remain self-contained. The engine itself never calls the
+network — only the React layer does, and only opportunistically.
+
 ---
 
 ## Public API
@@ -66,6 +77,7 @@ import {
 | `volume` | `(d)` | `number` — `V = L·W·H` (m³) |
 | `surfaceArea` | `(d)` | `number` — `S = 2(LW+LH+WH)` (m²) |
 | `absorptionByBand` | `(d, surfaces, materials)` | `number[]` — total Sabins per band |
+| `compareRT60` | `(predicted, measured)` | `RT60Comparison[]` — joins predicted + measured by band with a signed `deltaSec` |
 
 ```ts
 const rt60 = eyring({ L: 5, W: 4, H: 3 }, { floor: 'carpet', ceiling: 'ceilingTile', walls: 'drywall' });
@@ -166,6 +178,11 @@ This module is a **screening tool**, not a measurement. Specifically, it:
 - uses **representative, not authoritative**, absorption coefficients
   (see the `TODO` in `materials.ts`);
 - is **not a substitute for measured impulse-response commissioning**.
+
+The optional **measured** RT60 (via OCTOVOX `/api/rt60`) is a *blind* estimate
+from running sound — it depends on the recording containing audible free decays,
+is mildly biased low at low frequencies, and is itself **not** a swept-sine
+measurement. Treat the predicted-vs-measured comparison as indicative.
 
 Treat the numbers as ballpark guidance for early design decisions, and verify
 critical spaces with a real in-room measurement.

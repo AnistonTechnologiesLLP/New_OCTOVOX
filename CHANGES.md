@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-06-08 — Functional bridge: measured-vs-predicted RT60
+
+The acoustics page no longer only *predicts* RT60 from geometry — it can now
+overlay the **measured** RT60 of a real recording for comparison.
+
+- **Blind RT60 estimator** (new [`rt60_measure.py`](octovox_app/services/rt60_measure.py)):
+  per-octave-band free-decay Schroeder method — band-pass into the six octave
+  bands, detect free-decay tails (energy drops after a source switches off),
+  Schroeder-integrate each and fit the slope → `RT60 = −60/slope`, median per
+  band. Validated on synthetic reverberation (recovers a known T60 to within
+  ~10 % in the mid bands; the usual mild low-frequency underestimate). It is a
+  *blind* estimate from running sound — approximate, not a swept-sine
+  measurement. Tests: `tests/test_rt60_measure.py` (+6).
+- **API**: `POST /api/rt60 {filename}` → `{ok, ran, overall_rt60, bands:[{band,
+  rt60|null, n_decays}], n_decays, method}`. Measures the **raw** input (room
+  reverb), downmixed to mono.
+- **Engine** (`room-acoustics`): new pure `compareRT60(predicted, measured)`
+  joins the two curves by band and reports per-band `deltaSec` (+1 Vitest file).
+- **Acoustics UI**: a *Compare with a recording* row (file picker + **Measure
+  RT60**) under the RT60 chart overlays the measured curve (dashed white line +
+  dots) on the predicted bars and shows a per-band predicted→measured delta
+  strip, colour-coded by agreement. The panel **auto-hides when the OCTOVOX API
+  isn't reachable** (e.g. standalone `npm run dev`), so the module still runs on
+  its own.
+
+---
+
 ## 2026-06-08 — Room Acoustics estimator joined into the app (`/acoustics`)
 
 A standalone TypeScript/React room-acoustics module (RT60 + axial modes from

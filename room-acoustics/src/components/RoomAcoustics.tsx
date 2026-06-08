@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactElement } from 'react';
 import {
   MATERIAL_IDS,
   MATERIALS,
@@ -8,13 +8,19 @@ import {
   lowestMode,
   volume,
   auralize,
+  compareRT60,
   DEFAULT_MODE_CUTOFF,
   type MaterialId,
+  type MeasuredRT60Point,
   type RoomDimensions,
+  type RT60Comparison,
   type RT60Point,
   type RoomMode,
   type SurfaceKey,
 } from '../acoustics';
+
+/** Colour for the measured-RT60 overlay (contrasts with the category bars). */
+const MEASURED_COLOR = '#e7eef4';
 
 /** Theme colours (kept here so the engine stays presentation-free). */
 const C = {
@@ -68,6 +74,71 @@ export function RoomAcoustics(): ReactElement {
 
   const audioRef = useRef<AudioContext | null>(null);
   const [playing, setPlaying] = useState(false);
+
+  // ── Functional bridge to OCTOVOX: measure RT60 from a real recording. ──
+  // `recordings === null` means the OCTOVOX API isn't reachable (e.g. standalone
+  // dev) → the whole panel hides, so the app still works on its own.
+  const [recordings, setRecordings] = useState<string[] | null>(null);
+  const [selectedFile, setSelectedFile] = useState('');
+  const [measured, setMeasured] = useState<MeasuredRT60Point[] | null>(null);
+  const [measuring, setMeasuring] = useState(false);
+  const [measureNote, setMeasureNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/list_input');
+        if (!res.ok) throw new Error(String(res.status));
+        const json: { files?: Array<{ name: string }> } = await res.json();
+        const names = (json.files ?? []).map((f) => f.name);
+        if (!cancelled) {
+          setRecordings(names);
+          setSelectedFile((cur) => cur || names[0] || '');
+        }
+      } catch {
+        if (!cancelled) setRecordings(null); // OCTOVOX not present → hide the panel
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleMeasure(): Promise<void> {
+    if (!selectedFile) return;
+    setMeasuring(true);
+    setMeasureNote(null);
+    try {
+      const res = await fetch('/api/rt60', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: selectedFile }),
+      });
+      const json: {
+        ok: boolean;
+        ran?: boolean;
+        bands?: Array<{ band: number; rt60: number | null }>;
+        n_decays?: number;
+        error?: string;
+      } = await res.json();
+      if (!json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      if (!json.ran || !json.bands) {
+        setMeasured(null);
+        setMeasureNote('No reliable decays found — the recording may lack speech pauses or reverb.');
+        return;
+      }
+      setMeasured(json.bands.map((b) => ({ band: b.band, rt60: b.rt60 })));
+      setMeasureNote(`Measured from ${json.n_decays ?? 0} detected decays (blind estimate).`);
+    } catch (error) {
+      setMeasured(null);
+      setMeasureNote(`Measurement failed: ${error instanceof Error ? error.message : 'unknown'}`);
+    } finally {
+      setMeasuring(false);
+    }
+  }
+
+  const comparison = model.ok && measured ? compareRT60(model.rt60, measured) : null;
 
   const setDim = (axis: keyof RoomDimensions) => (event: ChangeEvent<HTMLInputElement>) => {
     const value = Number.parseFloat(event.target.value);
@@ -174,9 +245,52 @@ export function RoomAcoustics(): ReactElement {
           <section className="panel">
             <div className="panel-head">
               <span className="panel-title">RT60 vs frequency</span>
-              <Legend />
+              <Legend measured={measured !== null} />
             </div>
-            <Rt60Chart data={model.rt60} />
+            <Rt60Chart data={model.rt60} measured={measured} />
+
+            {recordings !== null && (
+              <div className="measure-row">
+                <span className="measure-label">Compare with a recording</span>
+                <select
+                  value={selectedFile}
+                  onChange={(e) => setSelectedFile(e.target.value)}
+                  disabled={recordings.length === 0 || measuring}
+                >
+                  {recordings.length === 0 ? (
+                    <option value="">no recordings in OCTOVOX</option>
+                  ) : (
+                    recordings.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <button
+                  type="button"
+                  className="btn-measure"
+                  onClick={handleMeasure}
+                  disabled={!selectedFile || measuring}
+                >
+                  {measuring ? 'Measuring…' : 'Measure RT60'}
+                </button>
+                {measured !== null && (
+                  <button
+                    type="button"
+                    className="btn-clear"
+                    onClick={() => {
+                      setMeasured(null);
+                      setMeasureNote(null);
+                    }}
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+            )}
+            {measureNote ? <p className="measure-note">{measureNote}</p> : null}
+            {comparison ? <ComparisonStrip rows={comparison} /> : null}
           </section>
 
           <section className="panel">
@@ -215,12 +329,31 @@ function Metric(props: { label: string; value: string; sub?: string; accent?: st
   );
 }
 
-function Rt60Chart({ data }: { data: readonly RT60Point[] }): ReactElement {
+function Rt60Chart({
+  data,
+  measured,
+}: {
+  data: readonly RT60Point[];
+  measured?: readonly MeasuredRT60Point[] | null;
+}): ReactElement {
   const width = 760;
   const height = 240;
   const pad = 40;
-  const max = Math.max(1.5, ...data.map((d) => d.rt60));
+  const measuredVals = (measured ?? []).map((m) => m.rt60).filter((v): v is number => v !== null);
+  const max = Math.max(1.5, ...data.map((d) => d.rt60), ...measuredVals);
   const bandWidth = (width - pad * 2) / data.length;
+  const centerX = (i: number): number => pad + i * bandWidth + bandWidth / 2;
+  const yOf = (rt: number): number => height - pad - Math.min(1, rt / max) * (height - pad * 2);
+
+  // Measured overlay: a polyline + dots at each band centre (gaps for nulls).
+  const measuredByBand = new Map((measured ?? []).map((m) => [m.band, m.rt60]));
+  const points = data
+    .map((d, i) => {
+      const m = measuredByBand.get(d.band);
+      return m === null || m === undefined ? null : { x: centerX(i), y: yOf(m), m };
+    })
+    .filter((p): p is { x: number; y: number; m: number } => p !== null);
+
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="chart" role="img" aria-label="RT60 by octave band">
       {[0, 0.4, 0.8, 1.2, 1.6, 2.0]
@@ -237,13 +370,13 @@ function Rt60Chart({ data }: { data: readonly RT60Point[] }): ReactElement {
           );
         })}
       {data.map((d, i) => {
-        const barHeight = Math.min(1, d.rt60 / max) * (height - pad * 2);
+        const y = yOf(d.rt60);
         const x = pad + i * bandWidth;
-        const y = height - pad - barHeight;
         const color = categoryFor(d.rt60).color;
+        const barHeight = height - pad - y;
         return (
           <g key={d.band}>
-            <rect x={x + 7} y={y} width={bandWidth - 14} height={barHeight} rx={3} fill={color} opacity={0.92} />
+            <rect x={x + 7} y={y} width={bandWidth - 14} height={barHeight} rx={3} fill={color} opacity={0.9} />
             <rect x={x + 7} y={y} width={bandWidth - 14} height={Math.min(4, barHeight)} rx={3} fill="#fff" opacity={0.18} />
             <text x={x + bandWidth / 2} y={height - pad + 16} textAnchor="middle" fontSize={11} fill={C.axis}>
               {d.band}
@@ -254,10 +387,57 @@ function Rt60Chart({ data }: { data: readonly RT60Point[] }): ReactElement {
           </g>
         );
       })}
+      {points.length > 1 ? (
+        <polyline
+          points={points.map((p) => `${p.x},${p.y}`).join(' ')}
+          fill="none"
+          stroke={MEASURED_COLOR}
+          strokeWidth={2}
+          strokeDasharray="5 4"
+          opacity={0.9}
+        />
+      ) : null}
+      {points.map((p) => (
+        <circle key={p.x} cx={p.x} cy={p.y} r={4} fill={MEASURED_COLOR} stroke="#0c1318" strokeWidth={1.5} />
+      ))}
       <text x={width / 2} y={height - 6} textAnchor="middle" fontSize={11} fill={C.axis}>
         Octave band (Hz)
       </text>
     </svg>
+  );
+}
+
+function ComparisonStrip({ rows }: { rows: readonly RT60Comparison[] }): ReactElement {
+  const deltaColor = (delta: number | null): string => {
+    if (delta === null) return C.axis;
+    const a = Math.abs(delta);
+    if (a < 0.1) return C.optimal;
+    if (a < 0.25) return C.lively;
+    return C.reverberant;
+  };
+  return (
+    <div className="cmp">
+      <div className="cmp-head">
+        Predicted vs measured · <span style={{ color: MEASURED_COLOR }}>○ measured</span> overlaid above
+      </div>
+      <div className="cmp-grid">
+        {rows.map((r) => (
+          <div key={r.band} className="cmp-cell">
+            <div className="cmp-band">{r.band} Hz</div>
+            <div className="cmp-vals">
+              <span title="predicted">{r.predicted.toFixed(2)}</span>
+              <span className="cmp-sep">→</span>
+              <span title="measured" style={{ color: MEASURED_COLOR }}>
+                {r.measured === null ? '—' : r.measured.toFixed(2)}
+              </span>
+            </div>
+            <div className="cmp-delta" style={{ color: deltaColor(r.deltaSec) }}>
+              {r.deltaSec === null ? 'n/a' : `${r.deltaSec >= 0 ? '+' : ''}${r.deltaSec.toFixed(2)} s`}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -311,7 +491,7 @@ function ModesChart({ modes }: { modes: readonly RoomMode[] }): ReactElement {
   );
 }
 
-function Legend(): ReactElement {
+function Legend({ measured = false }: { measured?: boolean }): ReactElement {
   const items = [
     { label: '< 0.8 s optimal', color: C.optimal },
     { label: '< 1.2 s lively', color: C.lively },
@@ -325,6 +505,12 @@ function Legend(): ReactElement {
           {item.label}
         </span>
       ))}
+      {measured ? (
+        <span className="legend-item">
+          <span className="legend-swatch" style={{ background: MEASURED_COLOR, borderRadius: '50%' }} />
+          measured
+        </span>
+      ) : null}
     </div>
   );
 }

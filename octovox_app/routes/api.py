@@ -730,6 +730,38 @@ def detect_speakers():
         return jsonify(ok=False, error=str(e)), 500
 
 
+@api_bp.route("/rt60", methods=["POST"])
+def measure_room_rt60():
+    """Blindly estimate the room's **measured** RT60 from a raw recording.
+
+    Body: ``{"filename": "<input.wav>"}``. Loads the raw 8-ch input, downmixes to
+    mono, and runs the free-decay Schroeder estimator (``rt60_measure``) per
+    octave band — the measured counterpart to the room-acoustics module's
+    geometry-based *prediction*, so the two can be compared on the /acoustics page.
+
+    Returns ``{ok, ran, overall_rt60, bands:[{band, rt60|null, n_decays}],
+    n_decays, method, elapsed_s}``. Measure the **raw** recording (room reverb),
+    not the cleaned output (which removes it).
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    fname = data.get("filename")
+    if not fname:
+        return jsonify(ok=False, error="filename required"), 400
+    wav_path = INPUT_DIR / secure_filename(fname)
+    if not wav_path.exists():
+        return jsonify(ok=False, error=f"file not found: {fname}"), 404
+    try:
+        from ..services import rt60_measure
+        t0 = time.time()
+        y, sr = cascade._load_multichannel(wav_path)      # (D, n) float32 in [-1,1]
+        mono = y.mean(axis=0)                              # room reverb is ~common across mics
+        result = rt60_measure.measure_rt60(mono, sr)
+        return jsonify(ok=True, elapsed_s=round(time.time() - t0, 3), **result)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(ok=False, error=str(e)), 500
+
+
 @api_bp.route("/devices_out")
 def list_output_devices():
     """List output-capable audio devices for stage [11] playout (USB/analog).
