@@ -550,7 +550,8 @@ def _directional_response(X, sv, band):
 
 
 def detect_talker_directions(y, fs, mic_pos, az_step=5.0, n_max=4,
-                             min_sep_deg=25.0, rel_thresh=0.45,
+                             min_sep_deg=25.0, rel_thresh=0.5,
+                             min_width_deg=10.0,
                              min_activity=0.04, fmin=200.0, fmax=4000.0):
     """Auto-detect the active talker directions on the array.
 
@@ -595,51 +596,77 @@ def detect_talker_directions(y, fs, mic_pos, az_step=5.0, n_max=4,
         if P.max() <= EPS:
             return {**_empty, "reason": "no directional speech energy"}
         # Circular-smooth the azimuth spectrum (it wraps at ±180) to suppress the
-        # jagged sidelobes a small array produces, then re-normalize.
+        # jagged sidelobes a small array produces.
         ksm = 3
         Ps = np.array([P[(np.arange(i - ksm, i + ksm + 1)) % len(P)].mean()
                        for i in range(len(P))])
-        Pn = Ps / Ps.max()
+        # CONTRAST-STRETCH (floor-subtract) before peak-picking. On a 40 mm UCA the
+        # SRP-PHAT azimuth spectrum sits on a huge OMNIDIRECTIONAL pedestal — the
+        # raw P(az) varies only ~0.5 % across all 360° (e.g. 0.995..1.000), with the
+        # directional information living in the tiny RIPPLE on top. Dividing by the
+        # max alone (the old ``Pn = Ps/Ps.max()``) keeps the pedestal, so every angle
+        # reads ~1.0 and a fixed ``rel_thresh`` is meaningless: the picker then padded
+        # the list up to ``n_max`` with the *shoulders* of each real plateau (this is
+        # why a 2-person clip came back as 4 talkers). Subtracting the floor and
+        # rescaling exposes the ripple so the threshold actually discriminates.
+        span = float(Ps.max() - Ps.min())
+        if span <= EPS:
+            return {**_empty, "reason": "flat spectrum — no directional contrast"}
+        Pr = (Ps - Ps.min()) / span                         # ripple in [0, 1]
         # Per-frame dominant azimuth → activity share per candidate angle.
         winner = frame_resp.argmax(axis=0)                  # (T,) az-index per frame
         speech_fr = soft.sum(axis=0) >= np.quantile(soft.sum(axis=0), 0.5)
-        # Peak-pick Pn: strict LOCAL maxima ≥ rel_thresh, greedily enforce a
-        # minimum angular separation (circular). A candidate must also clear a
-        # minimum speech-frame ACTIVITY so spatial sidelobes (high spectrum power
-        # but never the per-frame winner) are rejected — only directions a talker
-        # actually dominates for part of the clip survive.
-        # Greedy by descending spectrum power: the strongest angle is taken first,
-        # then every angle within ``min_sep_deg`` of an already-chosen one is
-        # skipped (so one peak yields one talker — this de-duplicates without a
-        # separate local-max test). A candidate must also clear ``rel_thresh`` of
-        # the global max AND a minimum speech-frame ACTIVITY, which rejects spatial
-        # sidelobes (high spectrum power but never the per-frame winner).
-        order = np.argsort(Pn)[::-1]
-        chosen = []
-        for idx in order:
-            if Pn[idx] < rel_thresh:
-                break
-            az = az_grid[idx]
-            if any(abs((az - az_grid[c] + 180) % 360 - 180) < min_sep_deg for c in chosen):
-                continue
+        # COUNT talkers as the contiguous PLATEAUS of the ripple, not as point peaks.
+        # A talker is a connected run of azimuths whose ripple clears ``rel_thresh``,
+        # bounded on both sides by a valley that drops below it; the talker's
+        # direction is that run's argmax. One plateau ⇒ one talker, so the picker can
+        # no longer mint extra speakers from a single source's shoulders — the count
+        # is whatever the spectrum genuinely resolves. NB: on this small array two
+        # talkers whose main lobes merge into one wide plateau cannot be separated and
+        # will (correctly, given the physics) read as a single direction; the manual
+        # radar aim is the fallback for that case.
+        above = Pr >= rel_thresh
+        n = len(Pr)
+        if above.all():                                     # one giant plateau
+            comps = [list(range(n))]
+        elif not above.any():
+            return {**_empty, "reason": "no talker direction above threshold"}
+        else:
+            z = int(np.argmax(~above))                      # rotate to start on a gap
+            rot = np.roll(above, -z)
+            comps, cur = [], []
+            for i in range(n):
+                if rot[i]:
+                    cur.append((i + z) % n)
+                elif cur:
+                    comps.append(cur); cur = []
+            if cur:
+                comps.append(cur)
+        min_w = max(int(round(min_width_deg / az_step)), 1)
+        cand = []                                           # (idx, ripple_height, act)
+        for comp in comps:
+            if len(comp) < min_w:
+                continue                                    # too narrow — a sidelobe
+            c = comp[int(np.argmax([Pr[m] for m in comp]))]
+            az = az_grid[c]
             ang = np.abs((az_grid[winner] - az + 180) % 360 - 180)
-            act = float(((ang <= min_sep_deg / 2.0) & speech_fr).sum() / max(speech_fr.sum(), 1))
+            act = float(((ang <= min_sep_deg / 2.0) & speech_fr).sum()
+                        / max(speech_fr.sum(), 1))
             if act < min_activity:
-                continue                                    # sidelobe, not a talker
-            chosen.append(idx)
-            if len(chosen) >= n_max:
-                break
-        chosen.sort(key=lambda c: az_grid[c])
-        speakers = []
-        for c in chosen:
-            ang = np.abs((az_grid[winner] - az_grid[c] + 180) % 360 - 180)
-            act = float(((ang <= min_sep_deg / 2.0) & speech_fr).sum() / max(speech_fr.sum(), 1))
-            speakers.append({"az": int(round(az_grid[c])),
-                             "strength": round(float(Pn[c]), 3),
-                             "activity": round(act, 3)})
+                continue                                    # never the per-frame winner
+            cand.append((c, float(Pr[c]), act))
+        if not cand:
+            return {**_empty, "reason": "no talker plateau cleared activity gate"}
+        # Keep the ``n_max`` strongest plateaus (safety cap), report by azimuth.
+        cand.sort(key=lambda t: -t[1])
+        cand = cand[:n_max]
+        cand.sort(key=lambda t: az_grid[t[0]])
+        speakers = [{"az": int(round(az_grid[c])),
+                     "strength": round(h, 3),
+                     "activity": round(a, 3)} for (c, h, a) in cand]
         return {"ran": True, "n_speakers": len(speakers), "speakers": speakers,
                 "spectrum": {"az": [int(a) for a in az_grid],
-                             "power": [round(float(v), 4) for v in Pn]}}
+                             "power": [round(float(v), 4) for v in Pr]}}
     except Exception as e:
         return {**_empty, "reason": f"error: {e}"}
 

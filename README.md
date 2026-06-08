@@ -133,7 +133,8 @@ real-time spot).
 | Dereverb | none · spectral · WPE | spectral = fast single-channel late-reverb suppressor (~0.02× RT); WPE = multichannel front-end (~3× RT). Off by default |
 | EQ | on / off | gentle speech-presence EQ |
 | **Generate report** | on / **off** | stage [report] HTML + matplotlib figure. **Off by default** so the 200–700 ms render is opt-in (it's not needed for the clean WAV) |
-| **Advanced** (collapsible) | sliders + toggle | off-axis blend (`mvdr_blend`, default 0.6 — higher keeps more of the off-axis speakers), DFN cap (`dfn_atten_lim_db`, default 32 dB), pause floor (`pause_floor_db`, default −40 dB), and a DOA azimuth readout toggle (`doa_readout`, diagnostic). All optional overrides of the API defaults |
+| **Advanced** (collapsible) | sliders + toggles | off-axis blend (`mvdr_blend`, default 0.6 — higher keeps more of the off-axis speakers), DFN cap (`dfn_atten_lim_db`, default 32 dB), pause floor (`pause_floor_db`, default −40 dB), a DOA azimuth readout toggle (`doa_readout`, diagnostic), and a **CFAR adaptive noise floor** toggle (`cfar`, **experimental, default off**). All optional overrides of the API defaults |
+| **CFAR adaptive noise floor** | on / **off** (Advanced) | swaps the speech mask's static whole-clip 10th-percentile noise floor for a **local, time-varying** CA-CFAR estimate (`cfar_local_floor`) — helps under **non-stationary** noise (HVAC swells, fans, knocks) by stopping noise bursts from being mislabelled as speech and corrupting the MVDR covariance. Per-request override of the `OCTOVOX_CFAR_MASK` env default; **off = today's floor, byte-for-byte**. Proven on synthetic A/B ([`tools/cfar_eval.py`](tools/cfar_eval.py)), not yet on real-recording listening — hence experimental |
 
 > **Note on tracking & beam-weighting.** The "noise-robust tracking" split is the
 > transferable idea from ceiling-array products (Biamp Parlé et al.): the

@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-06-08 — CFAR adaptive noise floor for the speech mask (experimental, opt-in)
+
+The soft mask that weights the MVDR speech/noise covariances
+([`estimate_softmask`](octovox_app/services/pipeline.py)) used a single
+whole-clip 10th-percentile floor per frequency bin — a *stationary*-noise
+assumption. Under non-stationary noise (HVAC swells, a fan spinning up, a knock)
+that floor is wrong in the loud stretches, so the mask mislabels noise bursts as
+speech, contaminating `Φ_v` and degrading the beam. A new opt-in CFAR path
+replaces the static floor with a **local, time-varying** one.
+
+- **CA-CFAR local floor** (new [`cfar_local_floor`](octovox_app/services/pipeline.py)):
+  the cell-averaging Constant-False-Alarm-Rate idea borrowed from radar — the
+  per-cell noise level is the mean of a surrounding *training ring*, excluding a
+  guard band + the cell-under-test, computed with a summed-area-table (integral
+  image) via `cumsum` (fully vectorized, no per-cell loops, NumPy/CuPy-agnostic).
+  The mask floor becomes `max(global_10th_pct, local_CFAR)` — a robust blend that
+  can only **raise** the floor, so it never does worse than the static baseline.
+- **Time-only ring by default** (`train_f=0, guard_f=0`). A ground-truth SI-SDR
+  A/B on synthetic non-stationary mixtures (new [`tools/cfar_eval.py`](tools/cfar_eval.py))
+  showed the frequency-axis ring averages neighbouring speech harmonics into the
+  floor and over-suppresses; the time-only ring was the consistent winner
+  (+20…+37 dB SI-SDR vs the static floor on those mixtures, by fixing an
+  over-permissive mask that was otherwise blowing up the MVDR conditioning).
+- **Off by default, two ways to enable.** Global default via the
+  `OCTOVOX_CFAR_MASK=1` env var (read once at import), or **per-request** via a
+  new **CFAR adaptive noise floor** checkbox under the Console's **Advanced**
+  controls → sent as `cfar` in the `/api/clean` body. A `contextvars`-based
+  override (`set_cfar_mask` / `reset_cfar_mask`, set and reset at the HTTP
+  boundary in [`routes/api.py`](octovox_app/routes/api.py)) drives
+  `estimate_softmask` per request with no server restart, and stays isolated
+  across concurrent requests. Unchecked + no env var = today's static floor,
+  byte-for-byte.
+- **Still experimental.** The benefit is proven on synthetic non-stationary
+  noise, not yet on a listening pass of real recordings — hence opt-in, filed
+  under Advanced, default off.
+
+---
+
 ## 2026-06-08 — Functional bridge: measured-vs-predicted RT60
 
 The acoustics page no longer only *predicts* RT60 from geometry — it can now
