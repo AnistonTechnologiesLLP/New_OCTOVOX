@@ -54,6 +54,10 @@ import os
 if os.environ.get("OCTOVOX_FORCE_CPU") == "1":
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
+# Informational mirror only (parity/logging); the authoritative behavioral gate
+# is pipeline._CFAR_MASK inside estimate_softmask. Default OFF.
+CFAR_MASK = os.environ.get("OCTOVOX_CFAR_MASK") == "1"
+
 import time
 from collections import OrderedDict
 from pathlib import Path

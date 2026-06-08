@@ -641,6 +641,10 @@ def clean_voice():
     # SRP-PHAT azimuth readout (diagnostic only — never drives the beam on this
     # UCA). Default off; it auto-runs when the auto decision actually needs it.
     doa_readout = bool(data.get("doa_readout", False))
+    # CFAR adaptive local noise floor for the soft mask (experimental). Per-request
+    # override of the OCTOVOX_CFAR_MASK env default — default off, so omitting it
+    # reproduces today's static 10th-percentile floor exactly.
+    cfar = bool(data.get("cfar", False))
     # Target-speaker selection: when set, routes stage [6] through extract_direction
     # (direction-masked RTF-MVDR) steered at this azimuth.  When only target_az is
     # given, interferers are auto-detected inside the pipeline; pass interferer_az
@@ -667,6 +671,10 @@ def clean_voice():
         if cand.exists():
             ref_path = cand
 
+    # Drive estimate_softmask's CFAR path for the duration of this request only;
+    # the finally restores the env default so one toggled call can't leak into the
+    # next request sharing this thread.
+    cfar_token = ov.set_cfar_mask(cfar)
     try:
         result = prod.run_production(
             wav_path, OUTPUT_DIR, reference_path=ref_path,
@@ -693,6 +701,8 @@ def clean_voice():
     except Exception as e:
         traceback.print_exc()
         return jsonify(ok=False, error=str(e)), 500
+    finally:
+        ov.reset_cfar_mask(cfar_token)
 
 
 @api_bp.route("/speakers", methods=["POST"])

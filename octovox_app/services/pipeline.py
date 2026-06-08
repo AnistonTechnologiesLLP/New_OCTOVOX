@@ -133,6 +133,35 @@ HAS_CUDA = False
 GPU_NAME = None
 GPU_MEM_GB = 0.0
 _FORCE_CPU = os.environ.get("OCTOVOX_FORCE_CPU") == "1"
+# CA-CFAR local noise floor for the soft mask. Default OFF: when unset the
+# soft-mask seam runs today's static 10th-percentile floor byte-for-byte.
+_CFAR_MASK = os.environ.get("OCTOVOX_CFAR_MASK") == "1"
+import contextvars as _contextvars
+# Per-request override of the CFAR soft-mask floor. None => fall back to the
+# _CFAR_MASK env default; True/False => force on/off for THIS context only. Set
+# and reset at the HTTP boundary (routes/api.py) so a per-call UI checkbox can
+# drive estimate_softmask without a server restart. A ContextVar (not a plain
+# global) keeps the override isolated per request thread, so concurrent /api
+# calls with different toggles can't clobber each other.
+_cfar_override = _contextvars.ContextVar("octovox_cfar_mask", default=None)
+
+def set_cfar_mask(enabled):
+    """Override CFAR soft-masking for the current context. ``enabled`` is
+    True/False to force on/off, or None to clear the override (revert to the
+    _CFAR_MASK env default). Returns a token — pass it to reset_cfar_mask()."""
+    return _cfar_override.set(None if enabled is None else bool(enabled))
+
+def reset_cfar_mask(token):
+    """Undo a set_cfar_mask() using its returned token. Never raises."""
+    try:
+        _cfar_override.reset(token)
+    except Exception:
+        pass
+
+def _cfar_enabled():
+    ov = _cfar_override.get()
+    return _CFAR_MASK if ov is None else ov
+
 try:
     import torch as _torch_probe                          # type: ignore
     if not _FORCE_CPU and _torch_probe.cuda.is_available():
@@ -336,12 +365,80 @@ def istft_single(X, n_out, nfft=NFFT, hop=HOP):
 # =============================================================================
 #  MASK / CSM / DOA / REFERENCE CHANNEL
 # =============================================================================
+def cfar_local_floor(power, xp=np, train_t=12, train_f=0, guard_t=2, guard_f=0, alpha=1.0):
+    """
+    CA-CFAR local noise floor (cell-averaging Constant False-Alarm Rate).
+
+    Estimates a per-cell noise mean from the surrounding TRAINING RING of the
+    (F,T) power map, excluding a guard band + the cell-under-test so the cell's
+    own speech energy and its STFT smear never enter its own estimate. The ring
+    mean is computed with a summed-area-table (integral image) via xp.cumsum —
+    no scipy, no per-cell loops — so it is identical on NumPy or CuPy.
+
+    power is (F,T) real float32. Returns an (F,T) float32 local-noise estimate
+    on the same backend, or None for degenerate / too-short clips.
+    """
+    F, T = power.shape
+    # Need room for a full training ring along time; mirror the line-347 T<5 skip.
+    if T < 5 or T < (2 * (train_t + guard_t) + 1):
+        return None
+
+    # float64 internally: ~F*T accumulations in the SAT subtraction otherwise
+    # suffer catastrophic cancellation.
+    P = xp.asarray(power, dtype=xp.float64)
+
+    def _sat(A):
+        # Integral image with a leading zero row/col so corner indexing is exact.
+        S = xp.zeros((F + 1, T + 1), dtype=xp.float64)
+        S[1:, 1:] = A
+        return S.cumsum(axis=0).cumsum(axis=1)
+
+    def boxsum(SAT, hf, ht):
+        # Centered box-sum of half-extents (hf,ht) at every cell, edge-CLAMPED so
+        # border cells use a valid smaller window instead of wrapping/zero-padding.
+        fi = xp.arange(F)
+        ti = xp.arange(T)
+        f0 = xp.clip(fi - hf,     0, F)            # top edge   (into SAT space)
+        f1 = xp.clip(fi + hf + 1, 0, F)            # bottom edge
+        t0 = xp.clip(ti - ht,     0, T)            # left edge
+        t1 = xp.clip(ti + ht + 1, 0, T)            # right edge
+        f0 = f0[:, None]; f1 = f1[:, None]
+        t0 = t0[None, :]; t1 = t1[None, :]
+        return SAT[f1, t1] - SAT[f0, t1] - SAT[f1, t0] + SAT[f0, t0]
+
+    SAT      = _sat(P)
+    ones_SAT = _sat(xp.ones((F, T), dtype=xp.float64))
+
+    # Ring = (training+guard+CUT) box minus (guard+CUT) box -> training cells only.
+    S_outer = boxsum(SAT, train_f + guard_f, train_t + guard_t)
+    S_inner = boxsum(SAT, guard_f, guard_t)
+    ring_sum = S_outer - S_inner
+
+    # Per-cell TRUE ring count (reduced at edges) removes edge divide-bias.
+    outer_cnt = boxsum(ones_SAT, train_f + guard_f, train_t + guard_t)
+    inner_cnt = boxsum(ones_SAT, guard_f, guard_t)
+    ring_cnt  = xp.maximum(outer_cnt - inner_cnt, 1.0)
+
+    local_noise = ring_sum / ring_cnt          # cell-averaged CFAR noise MEAN (F,T)
+    floor_local = alpha * local_noise          # alpha is the CFAR threshold knob
+    return xp.maximum(xp.asarray(floor_local, dtype=power.dtype), EPS)
+
+
 def estimate_softmask(X, prog=None):
     """Per-bin sigmoid on posterior SNR (vs 10th-percentile floor)."""
     F, T, C = X.shape
     mag = np.abs(X).mean(axis=2)
     power = mag**2
-    floor = np.maximum(np.quantile(power, 0.10, axis=1, keepdims=True), EPS)
+    floor_global = np.maximum(np.quantile(power, 0.10, axis=1, keepdims=True), EPS)
+    if _cfar_enabled():
+        try:
+            local = cfar_local_floor(power, xp=np)          # (F,T) or None
+            floor = floor_global if local is None else np.maximum(floor_global, local)
+        except Exception as e:
+            if prog is not None: prog.info(f"CFAR floor fell back to global quantile ({e})")
+            floor = floor_global
+    else:
+        floor = floor_global
     snr_post = power / floor
     M = 1.0 / (1.0 + np.exp(-(np.log(snr_post + EPS) - np.log(2.0))))
     if T >= 5:

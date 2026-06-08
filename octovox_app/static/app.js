@@ -1370,6 +1370,7 @@ function getProdOpts() {
   if ($("prodDfnCap"))     opts.dfn_atten_lim_db = parseFloat($("prodDfnCap").value);
   if ($("prodPauseFloor")) opts.pause_floor_db = parseFloat($("prodPauseFloor").value);
   if ($("prodDoaReadout")) opts.doa_readout = $("prodDoaReadout").checked;
+  if ($("prodCfar"))       opts.cfar = $("prodCfar").checked;
   // Target-speaker extraction: pass when a speaker is selected via the chip UI.
   if (state.targetAz != null) {
     opts.target_az = state.targetAz;
