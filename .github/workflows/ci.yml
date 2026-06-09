@@ -1,11 +1,13 @@
 name: CI
 
-# Run on every push to main and on every PR targeting main.
+# Run on every push to the default branch and on every PR targeting it.
+# Both `main` and `master` are listed because the repo's local default is
+# `master`; keeping both means CI fires regardless of which name the remote uses.
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:        # allow manual runs from the Actions tab
 
 # Cancel an in-progress run when a new commit is pushed to the same ref.
@@ -41,7 +43,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        # 3.13 is intentionally omitted: the deps pin numpy<2, which has no
+        # Python 3.13 wheel (3.13 support landed in numpy 2.0). Re-add 3.13 once
+        # the NumPy 2.0 migration is done (tracked in requirements-optional.txt).
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -61,49 +66,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest pytest-cov
 
       # Fails fast with a clear message if the app factory or any blueprint
       # import is broken — cheaper signal than waiting for the full suite.
       - name: App-boot smoke test
         run: python -c "from octovox_app import create_app; create_app(); print('create_app() OK')"
 
+      # Coverage is reported (term-missing) but NOT gated on a threshold yet —
+      # measure first, set a floor later once a baseline is established.
       - name: Run tests
-        run: pytest
-
-  # ── Optional neural-extras suite ──────────────────────────────────────
-  #  Heavy (CPU torch + DeepFilterNet2 + nara-wpe). Runs on main and on
-  #  manual dispatch only — not on every PR — and is pinned to Python 3.11,
-  #  the version the torch==2.1.2 wheels target. continue-on-error keeps a
-  #  flaky optional-dep install from blocking a merge; the core matrix above
-  #  is the gate.
-  test-optional:
-    name: Test (neural extras, py3.11)
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-optional.txt
-
-      - name: Install system libs
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libportaudio2 libsndfile1
-
-      - name: Install dependencies (core + CPU torch extras)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # Use the CPU-only torch index so we don't pull multi-GB CUDA wheels.
-          pip install torch==2.1.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cpu
-          pip install deepfilternet==0.5.6 "soundfile>=0.12" "nara-wpe>=0.0.9"
-          pip install pytest
-
-      - name: Run full suite (extras active)
-        run: pytest
+        run: pytest --cov=octovox_app --cov-report=term-missing

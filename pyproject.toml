@@ -16,7 +16,9 @@ target-version = "py311"
 line-length = 100
 # The pipeline DSP code predates linting and uses dense numerical style; lint
 # the app package and tests, but don't fail CI on stylistic nits there yet.
-extend-exclude = [".venv", ".venv311", "venv", "data"]
+# OCTOVOX_Colab.ipynb is a Colab convenience artifact (not app code) — its
+# google.colab-only imports aren't meaningful to lint, so exclude notebooks.
+extend-exclude = [".venv", ".venv311", "venv", "data", "*.ipynb"]
 
 [tool.ruff.lint]
 # Start conservative: pyflakes (F) catches real bugs (undefined names, unused

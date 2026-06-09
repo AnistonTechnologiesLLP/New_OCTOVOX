@@ -181,7 +181,7 @@ HAS_DFN = False
 _DFN_AVAILABLE = False          # Sprint C alias of HAS_DFN (explicit name)
 _DFN_IMPORT_ERROR = None        # repr() of the import failure, if any
 try:
-    from df.enhance import enhance, init_df          # type: ignore
+    from df.enhance import init_df          # type: ignore  (probes DFN availability; enhance() is imported lazily in _dfn_run_enhance)
     HAS_DFN = True
     _DFN_AVAILABLE = True
 except Exception as _dfn_err:

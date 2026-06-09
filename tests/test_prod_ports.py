@@ -10,9 +10,7 @@ Regression tests for the four DSP stages ported from the senior repo
 Each test uses short synthetic signals so it stays fast and deterministic.
 """
 import numpy as np
-import pytest
 
-from octovox_app.services import prod_pipeline as prod
 from octovox_app.services.prod_pipeline import (
     mic_health_report, perceptual_agc, feedback_risk, aec_partitioned, rtf_drift,
     condition_tracking_path, track_doa, dereverb_spectral, dd_wiener,
