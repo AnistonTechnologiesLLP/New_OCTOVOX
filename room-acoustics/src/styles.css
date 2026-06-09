@@ -1,29 +1,7 @@
 /* ============================================================================
-   Room Acoustics Estimator — dark "pro-audio" theme, matched to OCTOVOX.
+   Room Acoustics Estimator — shares the OCTOVOX design tokens (dark + light).
    ============================================================================ */
-
-:root {
-  --bg: #090e12;
-  --bg-2: #0c1318;
-  --panel: #111a21;
-  --panel-2: #0e161c;
-  --line: #1d2a33;
-  --line-2: #26343f;
-  --text: #e7eef4;
-  --text-2: #aebac6;
-  --muted: #6f8090;
-  --teal: #2dd4bf;
-  --teal-dim: #1c8b80;
-  --teal-glow: rgba(45, 212, 191, 0.22);
-  --violet: #a78bfa;
-  --blue: #5eb0ef;
-  --amber: #f5b14b;
-  --red: #f06363;
-  --green: #34d399;
-  --radius: 14px;
-  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --sans: 'Inter', system-ui, -apple-system, sans-serif;
-}
+@import './tokens.css';
 
 * {
   box-sizing: border-box;
@@ -34,14 +12,15 @@
 body {
   font-family: var(--sans);
   color: var(--text);
-  background:
-    radial-gradient(1100px 600px at 80% -10%, rgba(45, 212, 191, 0.1), transparent 60%),
-    radial-gradient(900px 500px at 0% 0%, rgba(167, 139, 250, 0.08), transparent 55%),
-    var(--bg);
+  background: var(--surface);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   line-height: 1.5;
 }
+
+/* header row holding the back link + the theme toggle */
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.theme-toggle-btn { cursor: pointer; background: none; font-family: var(--sans); }
 
 ::selection {
   background: var(--teal-glow);

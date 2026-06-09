@@ -323,7 +323,7 @@ def track_doa(y, fs, mic_pos, n_blocks=3, move_thresh_deg=25.0):
 # =========================================================================
 #  [5b]  RTF-DRIFT TALKER-MOVEMENT DETECTOR  (alternative to SRP-PHAT)
 # =========================================================================
-def rtf_drift(y, fs, n_blocks=6, move_thresh=0.12, fmin=300.0, fmax=3400.0, ref=0):
+def rtf_drift(y, fs, n_blocks=6, move_thresh=0.12, fmin=300.0, fmax=3400.0, ref=0, X=None):
     """Detect talker movement from how much the RTF *itself* changes block-to-block.
 
     The companion to :func:`track_doa`. Where ``track_doa`` estimates an azimuth
@@ -355,14 +355,19 @@ def rtf_drift(y, fs, n_blocks=6, move_thresh=0.12, fmin=300.0, fmax=3400.0, ref=
     azimuth readout), not as a replacement.
 
     Mirrors ``track_doa``'s contract: returns ``(info, moved)`` and degrades to
-    ``moved=False`` (cheap batch beam) on any failure.
+    ``moved=False`` (cheap batch beam) on any failure. ``X`` is the precomputed
+    multichannel STFT ``(F, T, D)`` of ``y``; when supplied (shared with the
+    beamformer) the 8-channel STFT is not recomputed here. The drift metric is
+    already speech-band-limited to ``[fmin, fmax]`` internally, so reusing the
+    audio-path STFT yields the same movement decision as the conditioned path.
     """
     from . import pipeline as ov
     try:
         D, n = y.shape
         if D < 2:
             return {"ran": False, "reason": "single channel"}, False
-        X = ov.stft_multich(np.ascontiguousarray(y.T))   # (F, T, D)
+        if X is None:
+            X = ov.stft_multich(np.ascontiguousarray(y.T))   # (F, T, D)
         F, T, _ = X.shape
         n_blocks = max(2, min(n_blocks, T // 2))         # need ≥2 frames/block
         freqs = np.fft.rfftfreq(ov.NFFT, 1.0 / fs)
@@ -456,8 +461,11 @@ def _mask_select_proxy(y, mask0, fs):
         return 0.0
 
 
-def beamform_masked(y, sr, mask_mode="snr", blend=0.9):
+def beamform_masked(y, sr, mask_mode="snr", blend=0.9, X=None):
     """Batch RTF-MVDR with a selectable speech/noise mask. Returns ``(mono, info)``.
+
+    ``X`` is the precomputed multichannel STFT ``(F, T, D)`` of ``y`` — reused
+    when supplied (shared with the movement detector), computed locally when None.
 
     ``mask_mode``:
       · ``"snr"`` (baseline) — the instrument's energy soft-mask only.
@@ -475,7 +483,8 @@ def beamform_masked(y, sr, mask_mode="snr", blend=0.9):
     D, n = y.shape
     if D == 1:
         return y[0].astype(np.float32), {"mask": mask_mode, "note": "single channel"}
-    X = ov.stft_multich(np.ascontiguousarray(y.T))          # (F, T, D)
+    if X is None:
+        X = ov.stft_multich(np.ascontiguousarray(y.T))      # (F, T, D)
     M0 = ov.estimate_softmask(X)
     ref, _ = ov.pick_reference_channel(X, M0)
 
@@ -1524,12 +1533,28 @@ def run_production(input_path, out_dir, *, reference_path=None,
     need_movement = (beam == "auto")
     run_rtf = need_movement and movement == "rtf"
     run_doa = doa_readout or (need_movement and movement == "srp")
-    run_trackers = run_rtf or run_doa
+    target_mode = target_az is not None
 
-    if track == "conditioned" and run_trackers:
+    # ── Shared multichannel STFT (audio path) — built ONCE here and reused by the
+    #  RTF-drift movement detector AND the beamformer, replacing the two separate
+    #  8-channel STFTs those stages used to each compute. D==1 short-circuits the
+    #  beamformers, so it is only built for a real array.
+    X_audio = (_stage("stft_shared", lambda: ov.stft_multich(np.ascontiguousarray(y.T)))
+               if D > 1 else None)
+
+    # ── [5·track] tracking-path conditioner — a noise-robust, phase-preserving
+    #  band-pass COPY of the array. It is now needed ONLY by the noise-sensitive
+    #  SRP-PHAT readout (track_doa) and the target-speaker detector. rtf_drift
+    #  reuses the shared audio STFT instead: its drift metric is speech-band-limited
+    #  internally and is validated (24/24 of these clips) to make the SAME
+    #  batch/tracked decision on the audio path, so conditioning it would cost a
+    #  second 8-ch STFT for no change in the beam decision.
+    needs_conditioning = run_doa or target_mode
+    if track == "conditioned" and needs_conditioning:
         y_track, tc_info = _stage("track_conditioning", lambda: condition_tracking_path(y, sr))
     elif track == "conditioned":
-        y_track, tc_info = y, {"ran": False, "reason": "skipped (no tracker active for this beam)"}
+        y_track, tc_info = y, {"ran": False,
+                               "reason": "skipped (rtf-drift reuses the shared audio STFT)"}
     else:
         y_track, tc_info = y, {"ran": False, "reason": "disabled (tracking uses the audio path)"}
     stages["track_conditioning"] = tc_info
@@ -1546,8 +1571,10 @@ def run_production(input_path, out_dir, *, reference_path=None,
     stages["doa"] = doa_info
 
     # ── [5b] movement selector — RTF drift (the only signal that switches) ─
+    #  Runs on the audio path reusing the shared STFT (X_audio) — see the
+    #  conditioner note above for why this matches the conditioned-path decision.
     if run_rtf:
-        rtf_info, moved = _stage("rtf_drift", lambda: rtf_drift(y_track, sr))
+        rtf_info, moved = _stage("rtf_drift", lambda: rtf_drift(y, sr, X=X_audio))
         stages["rtf_drift"] = rtf_info
         _log(f"prod: RTF drift steady-median {rtf_info.get('steady_median', '?')} → "
              f"{'moving' if moved else 'static'} talker")
@@ -1567,7 +1594,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
     #  force the choice regardless.
     #  TARGET-SPEAKER MODE: when ``target_az`` is set, replace the beam with a
     #  direction-masked extraction steered at that talker (and null the others).
-    target_mode = target_az is not None
+    #  (``target_mode`` was resolved above, before the conditioner gate.)
     interfs = []
     if target_mode:
         if interferer_az is None:
@@ -1605,10 +1632,10 @@ def run_production(input_path, out_dir, *, reference_path=None,
                                   interferer_az=interfs),
                 dtype=np.float32).reshape(-1)
         elif use_masked:
-            mvdr_raw, mask_meta = beamform_masked(y, sr, mask_mode=mask)
+            mvdr_raw, mask_meta = beamform_masked(y, sr, mask_mode=mask, X=X_audio)
             mvdr = np.asarray(mvdr_raw, dtype=np.float32).reshape(-1)
         else:
-            mvdr = np.asarray(chosen(y, sr), dtype=np.float32).reshape(-1)
+            mvdr = np.asarray(chosen(y, sr, X=X_audio), dtype=np.float32).reshape(-1)
         if mvdr.size == 0 or not np.all(np.isfinite(mvdr)):
             raise ValueError("beamformer returned empty/non-finite output")
         if len(mvdr) < n:

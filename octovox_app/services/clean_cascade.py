@@ -234,11 +234,14 @@ def static_mvdr_beamform(y, sr):
 #  covariance Φ_v, exactly as process_file builds them — so we rebuild those
 #  here from the (post-WPE) input and hand them straight through.
 # =========================================================================
-def batch_mvdr_beamform(y, sr):
+def batch_mvdr_beamform(y, sr, X=None):
     """Batch (reference-normalized) RTF-MVDR as a ``beamform_fn`` — the
     instrument's algorithm ② path, reusing the validated pipeline functions.
 
     ``y`` is ``(D, samples)``; returns the beamformed channel ``(samples,)``.
+    ``X`` is the precomputed multichannel STFT ``(F, T, D)`` of ``y``; when given
+    (e.g. shared with the movement detector) it is reused instead of recomputing
+    the 8-channel STFT here. Pass ``None`` to compute it locally as before.
 
     This is the cascade's recommended beamformer on this dataset: the
     instrument's 500-trial bootstrap ranks the batch RTF-MVDR above the tracked
@@ -259,8 +262,8 @@ def batch_mvdr_beamform(y, sr):
     if D == 1:
         return y[0].astype(np.float32)
 
-    x_sc = np.ascontiguousarray(y.T)                      # (samples, D) for pipeline
-    X = ov.stft_multich(x_sc)                             # (F, T, D)
+    if X is None:
+        X = ov.stft_multich(np.ascontiguousarray(y.T))    # (F, T, D)
     mask = ov.estimate_softmask(X)
     ref, _ = ov.pick_reference_channel(X, mask)
     phi_x, phi_v = ov.compute_csm_masked(X, mask)
@@ -271,13 +274,14 @@ def batch_mvdr_beamform(y, sr):
     return ov.istft_single(ov.apply_beamformer(X, w), n_out=n).astype(np.float32)
 
 
-def tracked_mvdr_beamform(y, sr):
+def tracked_mvdr_beamform(y, sr, X=None):
     """Time-varying RTF-MVDR (PAST subspace tracking) as a ``beamform_fn``.
 
     ``y`` is ``(D, samples)``; returns the beamformed channel ``(samples,)``.
     Follows a moving speaker where the static batch RTF locks onto stale
     geometry (the Sprint-B benefit). Reuses the validated pipeline functions
-    rather than reimplementing the tracker.
+    rather than reimplementing the tracker. ``X`` is the precomputed multichannel
+    STFT ``(F, T, D)`` of ``y`` — reused when supplied, computed locally when None.
     """
     from . import pipeline as ov
 
@@ -285,8 +289,8 @@ def tracked_mvdr_beamform(y, sr):
     if D == 1:
         return y[0].astype(np.float32)
 
-    x_sc = np.ascontiguousarray(y.T)                      # (samples, D) for pipeline
-    X = ov.stft_multich(x_sc)                             # (F, T, D)
+    if X is None:
+        X = ov.stft_multich(np.ascontiguousarray(y.T))    # (F, T, D)
     mask = ov.estimate_softmask(X)
     ref, _ = ov.pick_reference_channel(X, mask)
     _, phi_v = ov.compute_csm_masked(X, mask)

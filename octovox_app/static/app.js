@@ -104,7 +104,6 @@ window.addEventListener("unhandledrejection", e => {
 
 window.addEventListener("DOMContentLoaded", () => {
   setupHeroTypewriter();
-  setupNavSpy();
   setupTabs();
   setupDropzone();
   setupSamplePanel();
@@ -114,6 +113,9 @@ window.addEventListener("DOMContentLoaded", () => {
   loadDevices();
   loadOutputDevices();
   refreshFiles();
+  // App-shell: theme manager + view router + command palette (shell.js).
+  // Called last so state + handlers exist before the router activates a view.
+  if (window.Shell && window.Shell.afterAppInit) window.Shell.afterAppInit();
 });
 
 
@@ -152,22 +154,29 @@ function setupHeroTypewriter() {
 }
 
 
-/* ═══════════════════ NAV SPY ═══════════════════ */
-function setupNavSpy() {
-  const links = {};
-  qsa(".nav-link[data-section]").forEach(l => links[l.dataset.section] = l);
-  const obs = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        Object.values(links).forEach(l => l.classList.remove("active"));
-        const lk = links[e.target.id];
-        if (lk) lk.classList.add("active");
-      }
-    });
-  }, { rootMargin: "-25% 0px -60% 0px" });
-  ["capture", "queueSection", "results", "verdict"].forEach(id => {
-    const el = $(id); if (el) obs.observe(el);
-  });
+/* ═══════════════════ THEME-DRIVEN JS COLORS ═══════════════════
+ * WaveSurfer + the radar canvas can't read CSS, so they pull their colors
+ * from the same design tokens via getComputedStyle. shell.js calls
+ * refreshThemedJsColors() whenever the theme flips so both recolor live.
+ */
+function themeColors() {
+  const s = getComputedStyle(document.documentElement);
+  const v = n => s.getPropertyValue(n).trim();
+  return {
+    waveRaw: v("--wave-raw"), waveRawProg: v("--wave-raw-prog"),
+    waveClean: v("--wave-clean"), waveCleanProg: v("--wave-clean-prog"), waveCursor: v("--wave-cursor"),
+    radarRing: v("--radar-ring"), radarSpoke: v("--radar-spoke"), radarLabel: v("--radar-label"),
+    radarHub: v("--radar-hub"), radarBlip: v("--radar-blip"),
+    radarTarget: v("--radar-target"), radarHalo: v("--radar-target-halo"),
+  };
+}
+function refreshThemedJsColors() {
+  try {
+    const c = themeColors();
+    if (state.wsInput)  state.wsInput.setOptions({ waveColor: c.waveRaw, progressColor: c.waveRawProg, cursorColor: c.waveCursor });
+    if (state.wsWinner) state.wsWinner.setOptions({ waveColor: c.waveClean, progressColor: c.waveCleanProg, cursorColor: c.waveCursor });
+  } catch (e) {}
+  try { drawAzRadar(state.detectedSpeakers || [], state.targetAz); } catch (e) {}
 }
 
 
@@ -461,8 +470,7 @@ async function handleFile(file) {
         triggerProcess = false;
         Busy.release();           // release BEFORE refreshing so file row is interactive
         await refreshFiles();     // wait for the row to actually exist
-        const sec = $("queueSection");
-        if (sec) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (window.Shell) window.Shell.router.navigate("library");
         const row = document.querySelector(`.file-row[data-name="${cssEscape(j.name)}"]`);
         if (row) {
           row.classList.add("flash-highlight");
@@ -861,12 +869,14 @@ function renderFilesList(files, wMap) {
         const j = await r.json();
         if (j.ok) {
           if (state.currentStem === stem) {
-            $("results").classList.add("hidden");
-            $("navResults").setAttribute("data-disabled", "true");
             state.currentStem = null;
             state.currentMetrics = null;
             if (state.wsInput)  { try { state.wsInput.destroy(); } catch{} state.wsInput = null; }
             if (state.wsWinner) { try { state.wsWinner.destroy(); } catch{} state.wsWinner = null; }
+            if (window.Shell) {
+              window.Shell.router.refreshGate();
+              if (window.Shell.router.current === "studio") window.Shell.router.navigate("library");
+            }
           }
           toast(`Deleted ${fname} ✓`);
           refreshFiles();
@@ -1009,12 +1019,14 @@ async function clearAllOutput() {
     if (!j.ok) { toast("Clear failed: " + (j.error || "?"), "error"); return; }
 
     // Reset any currently-open results view.
-    $("results").classList.add("hidden");
-    $("navResults").setAttribute("data-disabled", "true");
     state.currentStem = null;
     state.currentMetrics = null;
     if (state.wsInput)  { try { state.wsInput.destroy(); }  catch {} state.wsInput = null; }
     if (state.wsWinner) { try { state.wsWinner.destroy(); } catch {} state.wsWinner = null; }
+    if (window.Shell) {
+      window.Shell.router.refreshGate();
+      if (window.Shell.router.current === "studio") window.Shell.router.navigate("library");
+    }
 
     toast(`Cleared ${j.removed} result${j.removed === 1 ? "" : "s"} ✓`);
     refreshFiles();
@@ -1179,26 +1191,27 @@ function drawAzRadar(speakers, targetAz) {
   const canvas = $("azRadar");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
+  const tc = themeColors();
   const W = canvas.width, H = canvas.height;
   const cx = W / 2, cy = H / 2;
   const R = Math.min(cx, cy) - 10;
   ctx.clearRect(0, 0, W, H);
   // Background circle + grid
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI);
-  ctx.strokeStyle = "#1d2a33"; ctx.lineWidth = 1; ctx.stroke();
+  ctx.strokeStyle = tc.radarRing; ctx.lineWidth = 1; ctx.stroke();
   for (let deg = 0; deg < 360; deg += 45) {
     const rad = (deg - 90) * Math.PI / 180;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.lineTo(cx + R * Math.cos(rad), cy + R * Math.sin(rad));
-    ctx.strokeStyle = "#141e26"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = tc.radarSpoke; ctx.lineWidth = 1; ctx.stroke();
   }
   // "F" label (front, 0°)
-  ctx.fillStyle = "#6f8090"; ctx.font = "9px JetBrains Mono, monospace";
+  ctx.fillStyle = tc.radarLabel; ctx.font = "9px JetBrains Mono, monospace";
   ctx.textAlign = "center"; ctx.fillText("F", cx, cy - R - 3);
   // Center dot (mic array)
   ctx.beginPath(); ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
-  ctx.fillStyle = "#334155"; ctx.fill();
+  ctx.fillStyle = tc.radarHub; ctx.fill();
   // Draw each detected speaker
   let targetMatched = false;
   (speakers || []).forEach(sp => {
@@ -1209,14 +1222,14 @@ function drawAzRadar(speakers, targetAz) {
     const x = cx + r * Math.cos(rad), y = cy + r * Math.sin(rad);
     // Line from center
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
-    ctx.strokeStyle = isTarget ? "#2dd4bf" : "#334155";
+    ctx.strokeStyle = isTarget ? tc.radarTarget : tc.radarHub;
     ctx.lineWidth = isTarget ? 2 : 1; ctx.stroke();
     // Dot
     ctx.beginPath(); ctx.arc(x, y, isTarget ? 6 : 4, 0, 2 * Math.PI);
-    ctx.fillStyle = isTarget ? "#2dd4bf" : "#475569"; ctx.fill();
+    ctx.fillStyle = isTarget ? tc.radarTarget : tc.radarBlip; ctx.fill();
     if (isTarget) {
       ctx.beginPath(); ctx.arc(x, y, 9, 0, 2 * Math.PI);
-      ctx.strokeStyle = "rgba(45,212,191,0.3)"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = tc.radarHalo; ctx.lineWidth = 2; ctx.stroke();
     }
   });
   // Manual aim that isn't one of the detected talkers → draw its own marker so
@@ -1225,15 +1238,15 @@ function drawAzRadar(speakers, targetAz) {
     const rad = (targetAz - 90) * Math.PI / 180;
     const x = cx + R * 0.85 * Math.cos(rad), y = cy + R * 0.85 * Math.sin(rad);
     ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
-    ctx.strokeStyle = "#2dd4bf"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = tc.radarTarget; ctx.lineWidth = 2; ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI);
-    ctx.fillStyle = "#2dd4bf"; ctx.fill();
+    ctx.fillStyle = tc.radarTarget; ctx.fill();
     ctx.beginPath(); ctx.arc(x, y, 9, 0, 2 * Math.PI);
-    ctx.strokeStyle = "rgba(45,212,191,0.3)"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = tc.radarHalo; ctx.lineWidth = 2; ctx.stroke();
   }
   // Hint when nothing is aimed/detected.
   if ((!speakers || !speakers.length) && targetAz == null) {
-    ctx.fillStyle = "#3a4a57"; ctx.font = "8px JetBrains Mono, monospace";
+    ctx.fillStyle = tc.radarLabel; ctx.font = "8px JetBrains Mono, monospace";
     ctx.textAlign = "center"; ctx.fillText("click to aim", cx, cy + R + 9);
   }
 }
@@ -1428,9 +1441,7 @@ function renderProduction(j) {
   state.currentStem = stem;
   state.currentClean = j.clean;
 
-  const res = $("results");
-  res.classList.remove("hidden");
-  $("navResults").removeAttribute("data-disabled");
+  if (window.Shell) window.Shell.router.refreshGate();
   const dur = (j.stages && j.stages.mic_capsules && j.stages.mic_capsules.duration_s) || 0;
   $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · ${dur.toFixed(1)} s · ${(j.sr/1000)} kHz · ${j.n_channels} ch`;
 
@@ -1465,7 +1476,7 @@ function renderProduction(j) {
     `raw 8-ch downmix`,
     `${opthLabel(getProdOpts())} · ${j.elapsed_s}s`);
   renderProdStages(j.stages || {}, j.timings || {});
-  res.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (window.Shell) window.Shell.router.navigate("studio");
 
   // Auto-detect talkers so the picker is pre-populated — but not during a batch
   // run, not if a target is already chosen, and not if we already detected this
@@ -1527,9 +1538,8 @@ function setReportButton(url) {
 
 /** Re-view a previously-cleaned file without re-running (loads output WAVs). */
 async function showResults(stem) {
-  $("results").classList.remove("hidden");
-  $("navResults").removeAttribute("data-disabled");
   state.currentStem = stem;
+  if (window.Shell) window.Shell.router.refreshGate();
   const clean = `/output/${stem}/clean_prod.wav`;
   state.currentClean = clean;
   $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · <span class="muted">re-run to refresh stage timings</span>`;
@@ -1538,7 +1548,7 @@ async function showResults(stem) {
   if ($("rerunProdBtn")) $("rerunProdBtn").onclick = () => runProduction(`${stem}.wav`);
   if ($("playoutBtn"))   $("playoutBtn").onclick = () => playToDevice(stem);
   loadABPlayers(`/output/${stem}/input_mono.wav`, clean, "raw 8-ch downmix", "clean_prod.wav");
-  $("results").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (window.Shell) window.Shell.router.navigate("studio");
 }
 
 /** Load raw-input and clean URLs into the two A/B wavesurfer players. */
@@ -1549,20 +1559,21 @@ function loadABPlayers(inputUrl, cleanUrl, inputSub, cleanSub) {
   $("trackInputSub").textContent = inputSub || "raw input";
   $("trackWinnerSub").textContent = cleanSub || "clean";
 
+  const tc = themeColors();
   state.wsInput = WaveSurfer.create({
     container: "#waveInput",
-    waveColor: "rgba(168, 176, 196, 0.6)",
-    progressColor: "rgba(168, 176, 196, 1)",
-    height: 64, cursorColor: "rgba(255,255,255,0.3)",
+    waveColor: tc.waveRaw,
+    progressColor: tc.waveRawProg,
+    height: 64, cursorColor: tc.waveCursor,
     barWidth: 2, barGap: 1, barRadius: 1,
   });
   if (inputUrl) state.wsInput.load(inputUrl);
 
   state.wsWinner = WaveSurfer.create({
     container: "#waveWinner",
-    waveColor: "rgba(45, 212, 191, 0.5)",
-    progressColor: "#2DD4BF",
-    height: 64, cursorColor: "rgba(255,255,255,0.4)",
+    waveColor: tc.waveClean,
+    progressColor: tc.waveCleanProg,
+    height: 64, cursorColor: tc.waveCursor,
     barWidth: 2, barGap: 1, barRadius: 1,
   });
   if (cleanUrl) state.wsWinner.load(cleanUrl);

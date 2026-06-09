@@ -3,7 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
     <title>Room Acoustics Estimator</title>
+    <!-- pre-paint theme (no flash): shares the console's octovox-theme key -->
+    <script>
+      (function () {
+        try {
+          var p = localStorage.getItem('octovox-theme') || 'system';
+          var d = matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute('data-theme', p === 'system' ? (d ? 'dark' : 'light') : p);
+        } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
