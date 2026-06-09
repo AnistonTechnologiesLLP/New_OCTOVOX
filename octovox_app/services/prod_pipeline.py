@@ -66,12 +66,11 @@ import numpy as np
 import scipy.signal as sps
 
 # Reuse the cascade's validated I/O + beamformers + neural wrappers wholesale.
-from . import clean_cascade as cc
 from .clean_cascade import (
     _load_multichannel, _save_mono, _peak_normalize,
     batch_mvdr_beamform, tracked_mvdr_beamform,
     _vad_silence_floor, _dfn_enhance, SR_DFN,
-    NFFT, HOP, WIN, EPS, SPEED_SOUND,
+    NFFT, HOP, WIN, EPS,
 )
 
 
