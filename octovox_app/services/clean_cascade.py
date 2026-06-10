@@ -234,7 +234,7 @@ def static_mvdr_beamform(y, sr):
 #  covariance Φ_v, exactly as process_file builds them — so we rebuild those
 #  here from the (post-WPE) input and hand them straight through.
 # =========================================================================
-def batch_mvdr_beamform(y, sr, X=None):
+def batch_mvdr_beamform(y, sr, X=None, vad=None, min_wng_db=None):
     """Batch (reference-normalized) RTF-MVDR as a ``beamform_fn`` — the
     instrument's algorithm ② path, reusing the validated pipeline functions.
 
@@ -242,6 +242,12 @@ def batch_mvdr_beamform(y, sr, X=None):
     ``X`` is the precomputed multichannel STFT ``(F, T, D)`` of ``y``; when given
     (e.g. shared with the movement detector) it is reused instead of recomputing
     the 8-channel STFT here. Pass ``None`` to compute it locally as before.
+    ``vad`` — optional per-STFT-frame Silero speech probabilities; when given,
+    VAD-confirmed speech frames are suppressed from the NOISE covariance (see
+    ``pipeline.vad_gated_noise_mask``) so Φ_v can't absorb the talker on
+    speech-dense clips. ``min_wng_db`` — optional white-noise-gain floor for
+    the MVDR solve (see ``pipeline.bf_mvdr``). Both default to the historical
+    behaviour (off).
 
     This is the cascade's recommended beamformer on this dataset: the
     instrument's 500-trial bootstrap ranks the batch RTF-MVDR above the tracked
@@ -266,11 +272,12 @@ def batch_mvdr_beamform(y, sr, X=None):
         X = ov.stft_multich(np.ascontiguousarray(y.T))    # (F, T, D)
     mask = ov.estimate_softmask(X)
     ref, _ = ov.pick_reference_channel(X, mask)
-    phi_x, phi_v = ov.compute_csm_masked(X, mask)
+    noise_mask = ov.vad_gated_noise_mask(mask, vad, fs=sr) if vad is not None else None
+    phi_x, phi_v = ov.compute_csm_masked(X, mask, noise_mask=noise_mask)
     phi_x = ov.regularise(phi_x)
     phi_v = ov.regularise(phi_v)
     rtf = ov.estimate_rtf(phi_x, phi_v, ref=ref)
-    w = ov.bf_mvdr(rtf, phi_v)
+    w = ov.bf_mvdr(rtf, phi_v, min_wng_db=min_wng_db)
     return ov.istft_single(ov.apply_beamformer(X, w), n_out=n).astype(np.float32)
 
 

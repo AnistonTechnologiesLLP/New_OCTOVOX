@@ -561,8 +561,16 @@ def clean_voice():
       · ``mask``  : "auto" (default — build both, keep the better, never worse than
                    baseline) | "coherent" (fuse the spatial-coherence/ASA cue into
                    the MVDR mask) | "snr". Affects the batch beam only.
-      · ``mvdr_blend`` (0..1, keeps off-axis speakers), ``dfn_atten_lim_db``,
-        and ``reference`` (filename of an optional far-end ref WAV for AEC).
+      · ``mvdr_blend`` (0..1, keeps off-axis speakers; or "auto" — purer 0.8
+        beam on a confirmed single static talker, costs ~8–10 s extra),
+        ``dfn_atten_lim_db``, and ``reference`` (optional far-end AEC WAV).
+      · ``wpe_band_hz`` : float (default 8000) — WPE dereverb band cap; only
+        active with ``dereverb="wpe"`` (raised from 6000: +1.5 dB SNR,
+        −18 dB bed measured on reverberant material).
+      · ``vad_gate`` : bool (default false) — VAD-gated noise covariance;
+        ``wng_db`` : float|null (default null) — MVDR white-noise-gain floor.
+        Both MEASURED as regressions on the project's real recordings —
+        diagnostic knobs, leave at defaults for normal use.
       · ``report`` : bool (default false) — render the standalone HTML report +
                    matplotlib figure. Off by default so the 200–700 ms render is
                    opt-in; when false ``report`` in the response is null.
@@ -614,10 +622,14 @@ def clean_voice():
     mask = str(data.get("mask", "auto")).lower()
     if mask not in ("snr", "coherent", "auto"):
         mask = "auto"
-    try:
-        mvdr_blend = max(0.0, min(1.0, float(data.get("mvdr_blend", 0.6))))
-    except (TypeError, ValueError):
-        mvdr_blend = 0.6
+    raw_blend = data.get("mvdr_blend", 0.6)
+    if isinstance(raw_blend, str) and raw_blend.lower() == "auto":
+        mvdr_blend = "auto"     # single-static-talker → 0.8, else 0.6 (slower)
+    else:
+        try:
+            mvdr_blend = max(0.0, min(1.0, float(raw_blend)))
+        except (TypeError, ValueError):
+            mvdr_blend = 0.6
     if "dfn_atten_lim_db" in data and data.get("dfn_atten_lim_db") is None:
         dfn_atten_lim_db = None
     else:
@@ -644,7 +656,25 @@ def clean_voice():
     # CFAR adaptive local noise floor for the soft mask (experimental). Per-request
     # override of the OCTOVOX_CFAR_MASK env default — default off, so omitting it
     # reproduces today's static 10th-percentile floor exactly.
+    # MEASURED 2026-06-10 on 4 real recordings: a REGRESSION (−3…−5 dB quick-SNR
+    # on 3/4 clips; noise bed up to 13 dB worse on transients) despite the large
+    # synthetic-mixture gains in CHANGES.md — leave OFF for real material.
     cfar = bool(data.get("cfar", False))
+    # VAD-gated noise covariance + white-noise-gain floor for the batch beam,
+    # and the WPE band cap. All measured 2026-06-10 (see run_production docs):
+    # vad_gate and wng_db regressed on real clips → default off/None; the WPE
+    # cap default is 8 kHz (validated +1.5 dB SNR / −18 dB bed on reverb).
+    vad_gate = bool(data.get("vad_gate", False))
+    wng_db = None
+    if data.get("wng_db") is not None:
+        try:
+            wng_db = float(data.get("wng_db"))
+        except (TypeError, ValueError):
+            wng_db = None
+    try:
+        wpe_band_hz = float(data.get("wpe_band_hz", 8000.0))
+    except (TypeError, ValueError):
+        wpe_band_hz = 8000.0
     # Target-speaker selection: when set, routes stage [6] through extract_direction
     # (direction-masked RTF-MVDR) steered at this azimuth.  When only target_az is
     # given, interferers are auto-detected inside the pipeline; pass interferer_az
@@ -683,7 +713,8 @@ def clean_voice():
             agc=agc, aec=aec, movement=movement, track=track, mask=mask,
             residual=residual, pause_floor_db=pause_floor_db,
             target_az=target_az, interferer_az=interferer_az,
-            doa_readout=doa_readout, report=report)
+            doa_readout=doa_readout, report=report,
+            vad_gate=vad_gate, wng_db=wng_db, wpe_band_hz=wpe_band_hz)
         clean_url = f"/output/{result['stem']}/{result['clean_name']}"
         input_url = f"/output/{result['stem']}/{result['input_name']}"
         report_url = (f"/output/{result['stem']}/{result['report_name']}"

@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-06-10 — Quality pass: measured-knob audit (WPE band ↑, three new opt-in knobs, CFAR verdict)
+
+A measurement-driven quality pass on the production beam path. Every change was scored on
+4 real project recordings with the instrument's own `quick_snr` metric plus noise-bed
+(p20 of 30 ms-window RMS) and speech-level (p80) checks. **Default output is unchanged for
+every existing knob combination except `dereverb="wpe"`** (see below).
+
+**Default change (validated win)**
+- **WPE band cap raised 6 kHz → 8 kHz** (`run_production(wpe_band_hz=8000.0)`, threading the
+  existing `wpe_dereverberate(max_freq_hz=…)` param). The 6 kHz cap left sibilant-band reverb
+  untouched. Measured on the most reverberant clip (RT60 0.58 s): **+1.5 dB quick-SNR and an
+  18 dB quieter noise bed** (−63.4 → −81.4 dBFS) for ~+55% WPE-stage runtime — the right trade
+  on the explicitly slow `dereverb="wpe"` quality path. `wpe_band_hz=6000` restores the old cap.
+
+**New opt-in knobs (implemented, measured, default OFF — the measurements said so)**
+- `wng_db` — white-noise-gain floor for the batch MVDR (`pipeline.bf_mvdr(min_wng_db=…)`,
+  iterative diagonal loading, Cox-1987 style; preserves the distortionless constraint).
+  Measured: floors of 0/−6 dB **lost 1.2–4 dB** quick-SNR on 3/4 real clips → default `None`.
+- `vad_gate` — VAD-gated noise covariance (`pipeline.vad_gated_noise_mask`): Silero-confirmed
+  speech frames (±150 ms hangover) are suppressed from Φ_v, with a starvation guard that falls
+  back to the plain `1−mask` complement. Reuses the stage-[4] VAD (no extra cost). Measured:
+  **lost 0.3–4.5 dB on 3/4 clips** (+1.1 dB on the most reverberant) → default off.
+- `mvdr_blend="auto"` — detects the talker count (reusing the shared beamformer STFT) and uses
+  a purer 0.8 blend on a confirmed single static talker, 0.6 otherwise. Works as designed
+  (measured +1.9 dB SNR / −3 dB bed on the single-talker clip; picked 0.6 correctly on the
+  2-person clip) but the azimuth scan costs ~8–10 s on CPU → opt-in, not the default.
+
+**CFAR verdict (closes the "experimental" loop)**
+- The CA-CFAR adaptive mask floor (`OCTOVOX_CFAR_MASK` / `cfar` knob), which showed
+  +20…+37 dB SI-SDR on synthetic non-stationary mixtures, was A/B'd on 4 REAL recordings:
+  **a regression** — −3…−5 dB quick-SNR on 3/4 clips and a noise bed up to 13 dB worse on the
+  transient (knock) clip. Verdict: **leave OFF for real material**; the synthetic gains do not
+  transfer. Noted at the `/api/clean` knob so it isn't re-flipped blindly.
+
+**Also measured (no code change shipped)**
+- `dereverb="spectral"`: +3…+7 dB quick-SNR on reverberant clips, ~neutral on dry ones, ~free —
+  the strongest default-flip candidate, pending a listening pass (tracked, not flipped here).
+- Pure MVDR (`mvdr_blend=1.0`) collapsed one clip's output to near-silence (−81 dBFS speech) —
+  empirical confirmation of why the downmix blend exists.
+
 ## 2026-06-09 — Maintenance pass: green CI, lint fixes, dependency bounds, leaner test suite
 
 A non-functional pass — **no change to audio output, DSP defaults, or any API contract** —

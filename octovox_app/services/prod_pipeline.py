@@ -461,11 +461,14 @@ def _mask_select_proxy(y, mask0, fs):
         return 0.0
 
 
-def beamform_masked(y, sr, mask_mode="snr", blend=0.9, X=None):
+def beamform_masked(y, sr, mask_mode="snr", blend=0.9, X=None, vad=None,
+                    min_wng_db=None):
     """Batch RTF-MVDR with a selectable speech/noise mask. Returns ``(mono, info)``.
 
     ``X`` is the precomputed multichannel STFT ``(F, T, D)`` of ``y`` — reused
     when supplied (shared with the movement detector), computed locally when None.
+    ``vad`` / ``min_wng_db`` — see :func:`clean_cascade.batch_mvdr_beamform`
+    (VAD-gated noise covariance, white-noise-gain floor); both off by default.
 
     ``mask_mode``:
       · ``"snr"`` (baseline) — the instrument's energy soft-mask only.
@@ -489,10 +492,12 @@ def beamform_masked(y, sr, mask_mode="snr", blend=0.9, X=None):
     ref, _ = ov.pick_reference_channel(X, M0)
 
     def _beam(mask):
-        phi_x, phi_v = ov.compute_csm_masked(X, mask)
+        nm = ov.vad_gated_noise_mask(mask, vad, fs=sr) if vad is not None else None
+        phi_x, phi_v = ov.compute_csm_masked(X, mask, noise_mask=nm)
         phi_x = ov.regularise(phi_x)
         phi_v = ov.regularise(phi_v)
-        w = ov.bf_mvdr(ov.estimate_rtf(phi_x, phi_v, ref=ref), phi_v)
+        w = ov.bf_mvdr(ov.estimate_rtf(phi_x, phi_v, ref=ref), phi_v,
+                       min_wng_db=min_wng_db)
         return ov.istft_single(ov.apply_beamformer(X, w), n_out=n).astype(np.float32)
 
     if mask_mode == "snr":
@@ -560,7 +565,8 @@ def _directional_response(X, sv, band):
 def detect_talker_directions(y, fs, mic_pos, az_step=5.0, n_max=4,
                              min_sep_deg=25.0, rel_thresh=0.5,
                              min_width_deg=10.0,
-                             min_activity=0.04, fmin=200.0, fmax=4000.0):
+                             min_activity=0.04, fmin=200.0, fmax=4000.0,
+                             X=None):
     """Auto-detect the active talker directions on the array.
 
     Builds a speech-weighted SRP-PHAT *azimuth spectrum* — for every candidate
@@ -583,7 +589,8 @@ def detect_talker_directions(y, fs, mic_pos, az_step=5.0, n_max=4,
         D, n = y.shape
         if D < 2:
             return {**_empty, "reason": "single channel — no spatial info"}
-        X = ov.stft_multich(np.ascontiguousarray(y.T))     # (F,T,D)
+        if X is None:
+            X = ov.stft_multich(np.ascontiguousarray(y.T))     # (F,T,D)
         F, T, _ = X.shape
         soft = ov.estimate_softmask(X)                      # (F,T) speech weight
         freqs = np.fft.rfftfreq(ov.NFFT, 1.0 / fs)
@@ -1297,7 +1304,8 @@ def run_production(input_path, out_dir, *, reference_path=None,
                    track="conditioned", dereverb=None, mask="auto",
                    residual=0.6, pause_floor_db=-40.0,
                    target_az=None, interferer_az=None,
-                   doa_readout=False, report=True, log=None):
+                   doa_readout=False, report=True, log=None,
+                   vad_gate=False, wng_db=None, wpe_band_hz=8000.0):
     """Run the production voice pipeline on one 8-channel WAV → one clean mono WAV.
 
     Parameters
@@ -1416,6 +1424,39 @@ def run_production(input_path, out_dir, *, reference_path=None,
         [report]). The DEFAULT ``True`` keeps direct/library callers' behaviour;
         the ``/api/clean`` endpoint defaults it OFF so the per-request matplotlib
         render (200–700 ms) is opt-in. When ``False``, ``report_name`` is ``None``.
+    vad_gate : bool
+        Suppress VAD-confirmed speech frames from the NOISE covariance of the
+        batch beam (stage [6], see :func:`pipeline.vad_gated_noise_mask`).
+        Attacks the root cause of Φ_v speech-contamination on speech-dense
+        clips; reuses the stage-[4] Silero probabilities (no extra VAD cost).
+        DEFAULT OFF — and measured to stay off: on the project's real
+        recordings it LOST 0.3–4.5 dB quick-SNR on 3/4 clips (won +1.1 dB on
+        the most reverberant one). The energy mask's "contamination"
+        apparently carries useful spatial evidence here. Kept as a knob for
+        atypical material (e.g. wall-to-wall speech over strong HVAC).
+    wng_db : float | None
+        White-noise-gain floor for the batch MVDR solve (stage [6], see
+        :func:`pipeline.bf_mvdr`). Robustifies ill-conditioned bins on
+        reverberant clips; e.g. ``0.0`` requires the beam to never amplify
+        uncorrelated noise. ``None`` (DEFAULT) = unconstrained — and measured
+        to stay so: floors of 0 / −6 dB lost 1.2–4 dB quick-SNR on 3/4 real
+        clips (small +1.6 dB on the knock clip but with a 9 dB WORSE noise
+        bed). The unconstrained solve's "risky" bins are evidently doing
+        useful rejection on this 8-mic array. Knob retained for diagnosis.
+    wpe_band_hz : float
+        Upper band limit for the opt-in WPE front-end (``dereverb="wpe"``).
+        DEFAULT ``8000.0`` — raised from the historical 6000, which left
+        sibilant-band (5–10 kHz) reverb untouched. Measured on the most
+        reverberant project clip (RT60 0.58 s): +1.5 dB SNR and an 18 dB
+        quieter noise bed for ~+55% WPE-stage runtime — the right trade on
+        the explicitly slow quality path. Set 6000.0 to restore the old cap.
+    mvdr_blend : float in [0,1] | "auto"
+        See above; ``"auto"`` additionally detects the talker count (reusing
+        the shared STFT) and uses 0.8 on a confirmed single static talker
+        (purer beam, quieter bed; measured +1.9 dB SNR / −3 dB bed on the
+        single-talker clip), 0.6 otherwise (off-axis safety). NOT the default
+        because the azimuth scan costs ~8–10 s on CPU — opt in when quality
+        on single-talker material matters more than turnaround.
     log : callable | None  -- optional progress sink.
 
     Returns
@@ -1485,7 +1526,8 @@ def run_production(input_path, out_dir, *, reference_path=None,
     #  fast dereverb="spectral" path instead runs on the mono AFTER beamforming.
     if dereverb == "wpe" and getattr(ov, "HAS_WPE", False) and D > 1:
         def _do_wpe():
-            x_sc = ov.wpe_dereverberate(y.T, sr, taps=8, delay=3, iterations=2)
+            x_sc = ov.wpe_dereverberate(y.T, sr, taps=8, delay=3, iterations=2,
+                                        max_freq_hz=float(wpe_band_hz))
             x_sc = np.ascontiguousarray(x_sc.T)
             # Guard WPE's overshoot: clamp each channel to its input peak so the
             # downmix never exceeds [-1,1] (else Silero VAD reports 0% speech).
@@ -1503,7 +1545,11 @@ def run_production(input_path, out_dir, *, reference_path=None,
     _log(f"prod: WPE dereverb {'done' if stages['dereverb_wpe'].get('ran') else 'skipped'}")
 
     # ── [4] VAD / speech detector (on the array downmix) ───────────────
+    #  The per-frame probabilities are kept (vad_probs) so the beamformer can
+    #  gate its noise covariance on them when vad_gate is set — no second VAD.
+    vad_probs = None
     def _vad_detect():
+        nonlocal vad_probs
         if not getattr(ov, "HAS_VAD", False):
             return {"ran": False, "reason": "Silero VAD unavailable"}
         # Silero expects an in-range signal; intermediate downmixes can exceed
@@ -1514,6 +1560,7 @@ def run_production(input_path, out_dir, *, reference_path=None,
         if probs is None or len(probs) == 0:
             return {"ran": False, "reason": "VAD returned no frames"}
         probs = np.asarray(probs, dtype=np.float32)
+        vad_probs = probs
         sp = float((probs > 0.5).mean())
         return {"ran": True, "speech_ratio": round(sp, 3), "total_frames": int(len(probs))}
     stages["vad"] = _stage("vad", _vad_detect)
@@ -1622,6 +1669,30 @@ def run_production(input_path, out_dir, *, reference_path=None,
         use_masked = (chosen is batch_mvdr_beamform) and (mask != "snr")
     mask_meta = {"mask": "snr"}
 
+    # ── [6·blend] adaptive off-axis blend — "auto" detects the talker count
+    #  (reusing the shared STFT, so the cost is the azimuth scan only) and
+    #  picks 0.8 on a confirmed single STATIC talker (purer beam → quieter
+    #  bed; measured +1.9 dB SNR on single-talker clips) but stays at the
+    #  safe 0.6 whenever a second talker or movement is in play.
+    if isinstance(mvdr_blend, str):
+        if mvdr_blend == "auto" and not target_mode and D > 1:
+            det = _stage("blend_auto", lambda: detect_talker_directions(
+                y, sr, ov.POLARIS_UCA_M, X=X_audio))
+            single = bool(det.get("ran")) and det.get("n_speakers", 0) <= 1 and not moved
+            mvdr_blend = 0.8 if single else 0.6
+            stages["blend_auto"] = {"ran": bool(det.get("ran")),
+                                    "n_speakers": det.get("n_speakers", 0),
+                                    "moved": bool(moved),
+                                    "blend": mvdr_blend}
+            _log(f"prod: auto blend → {mvdr_blend} "
+                 f"({det.get('n_speakers', '?')} talker(s), "
+                 f"{'moving' if moved else 'static'})")
+        else:
+            mvdr_blend = 0.6
+
+    # VAD gate for the noise covariance: only meaningful with usable probs.
+    beam_vad = vad_probs if (vad_gate and vad_probs is not None) else None
+
     def _beamform():
         nonlocal mask_meta
         if target_mode:
@@ -1632,8 +1703,13 @@ def run_production(input_path, out_dir, *, reference_path=None,
                                   interferer_az=interfs),
                 dtype=np.float32).reshape(-1)
         elif use_masked:
-            mvdr_raw, mask_meta = beamform_masked(y, sr, mask_mode=mask, X=X_audio)
+            mvdr_raw, mask_meta = beamform_masked(
+                y, sr, mask_mode=mask, X=X_audio, vad=beam_vad, min_wng_db=wng_db)
             mvdr = np.asarray(mvdr_raw, dtype=np.float32).reshape(-1)
+        elif chosen is batch_mvdr_beamform:
+            mvdr = np.asarray(chosen(y, sr, X=X_audio, vad=beam_vad,
+                                     min_wng_db=wng_db),
+                              dtype=np.float32).reshape(-1)
         else:
             mvdr = np.asarray(chosen(y, sr, X=X_audio), dtype=np.float32).reshape(-1)
         if mvdr.size == 0 or not np.all(np.isfinite(mvdr)):
@@ -1657,6 +1733,8 @@ def run_production(input_path, out_dir, *, reference_path=None,
         stages["beamform"] = {"ran": True, "method": method, "beam_mode": beam,
                               "moving_talker": bool(moved), "blend": blend_note,
                               "mask": mask, "mask_info": mask_meta,
+                              "vad_gate": bool(beam_vad is not None),
+                              "wng_db": wng_db,
                               "peak_norm_db": round(gbf, 1)}
         if target_mode:
             stages["beamform"].update({"target_az": int(round(float(target_az))),
