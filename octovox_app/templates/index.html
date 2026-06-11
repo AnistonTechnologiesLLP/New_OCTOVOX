@@ -200,6 +200,17 @@
 
       <!-- ───────── STUDIO (console / results) ───────── -->
       <section class="view" id="viewStudio" data-view="studio">
+        <!-- Empty state — shown until a file has been cleaned (no more bounce). -->
+        <div class="panel studio-empty" id="studioEmpty">
+          <div class="studio-empty-glyph">◈</div>
+          <div class="studio-empty-title">Nothing to compare yet</div>
+          <div class="studio-empty-body">Clean a recording and its raw-vs-clean comparison, signal chain, and timings show up here.</div>
+          <div class="studio-empty-actions">
+            <button class="btn btn-primary btn-sm" id="studioEmptyGo">Go to Library</button>
+            <button class="btn btn-ghost btn-sm" id="studioEmptySample">Try a sample</button>
+          </div>
+        </div>
+
         <div class="studio-caption"><span class="studio-caption-tag">NOW VIEWING</span><span id="resultsFile">—</span></div>
 
         <div class="panel console-main">
@@ -213,70 +224,83 @@
               <div class="cstat"><div class="cstat-v" id="wsRtf">—</div><div class="cstat-l">× real-time</div></div>
             </div>
             <div class="cs-controls" id="prodControls">
-              <label class="ctl"><span class="ctl-lab">Preset</span>
-                <select id="prodPreset" class="inp">
-                  <option value="quality" selected>Quality (DFN3, full)</option>
-                  <option value="fast">Fast (low runtime)</option>
-                  <option value="custom">Custom</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">Noise reduction</span>
-                <select id="prodNr" class="inp">
-                  <option value="dfn" selected>Natural — DeepFilterNet3</option>
-                  <option value="fast">Fast — decision-directed</option>
-                  <option value="none">None (beam only)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">Beam</span>
-                <select id="prodBeam" class="inp">
-                  <option value="auto" selected>Auto (batch, switches on movement)</option>
-                  <option value="batch">Batch</option>
-                  <option value="tracked">Tracked (moving)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">Movement</span>
-                <select id="prodMovement" class="inp">
-                  <option value="srp">SRP-PHAT (azimuth)</option>
-                  <option value="rtf" selected>RTF drift (auto-switch)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">Mask</span>
-                <select id="prodMask" class="inp">
-                  <option value="snr">SNR (baseline)</option>
-                  <option value="auto" selected>Coherence auto (safe)</option>
-                  <option value="coherent">Coherence (always)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">AGC</span>
-                <select id="prodAgc" class="inp">
-                  <option value="perceptual">Perceptual (attack/release)</option>
-                  <option value="rms" selected>RMS (instantaneous)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">AEC</span>
-                <select id="prodAec" class="inp">
-                  <option value="partitioned" selected>Partitioned (long tail)</option>
-                  <option value="single">Single-tap</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">AEC reference</span>
-                <select id="prodReference" class="inp" title="Far-end loudspeaker feed for echo cancellation — without it AEC is a no-op">
-                  <option value="" selected>None (AEC off)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">Dereverb</span>
-                <select id="prodDereverb" class="inp">
-                  <option value="none" selected>None</option>
-                  <option value="spectral">Spectral (fast)</option>
-                  <option value="wpe">WPE (quality, slow)</option>
-                </select>
-              </label>
-              <label class="ctl"><span class="ctl-lab">Denoise strength <span id="prodResidualVal" class="ctl-val">0.6</span></span>
-                <input type="range" id="prodResidual" class="inp inp-range" min="0" max="1" step="0.05" value="0.6">
-              </label>
-              <label class="ctl ctl-chk"><input type="checkbox" id="prodTrack" checked><span>Noise-robust tracking</span></label>
-              <label class="ctl ctl-chk"><input type="checkbox" id="prodEq" checked><span>EQ</span></label>
-              <label class="ctl ctl-chk"><input type="checkbox" id="prodReport"><span>Generate report</span></label>
+              <!-- grouped into soft neumorphic modules; IDs/labels unchanged -->
+              <div class="ctl-group">
+                <div class="ctl-group-head">Preset</div>
+                <label class="ctl"><span class="ctl-lab">Preset</span>
+                  <select id="prodPreset" class="inp">
+                    <option value="quality" selected>Quality (DFN3, full)</option>
+                    <option value="fast">Fast (low runtime)</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="ctl-group">
+                <div class="ctl-group-head">Noise · Beam · Movement · Mask</div>
+                <label class="ctl"><span class="ctl-lab">Noise reduction</span>
+                  <select id="prodNr" class="inp">
+                    <option value="dfn" selected>Natural — DeepFilterNet3</option>
+                    <option value="fast">Fast — decision-directed</option>
+                    <option value="none">None (beam only)</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">Beam</span>
+                  <select id="prodBeam" class="inp">
+                    <option value="auto" selected>Auto (batch, switches on movement)</option>
+                    <option value="batch">Batch</option>
+                    <option value="tracked">Tracked (moving)</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">Movement</span>
+                  <select id="prodMovement" class="inp">
+                    <option value="srp">SRP-PHAT (azimuth)</option>
+                    <option value="rtf" selected>RTF drift (auto-switch)</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">Mask</span>
+                  <select id="prodMask" class="inp">
+                    <option value="snr">SNR (baseline)</option>
+                    <option value="auto" selected>Coherence auto (safe)</option>
+                    <option value="coherent">Coherence (always)</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="ctl-group">
+                <div class="ctl-group-head">AGC · AEC · Dereverb</div>
+                <label class="ctl"><span class="ctl-lab">AGC</span>
+                  <select id="prodAgc" class="inp">
+                    <option value="perceptual">Perceptual (attack/release)</option>
+                    <option value="rms" selected>RMS (instantaneous)</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">AEC</span>
+                  <select id="prodAec" class="inp">
+                    <option value="partitioned" selected>Partitioned (long tail)</option>
+                    <option value="single">Single-tap</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">AEC reference</span>
+                  <select id="prodReference" class="inp" title="Far-end loudspeaker feed for echo cancellation — without it AEC is a no-op">
+                    <option value="" selected>None (AEC off)</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">Dereverb</span>
+                  <select id="prodDereverb" class="inp">
+                    <option value="none" selected>None</option>
+                    <option value="spectral">Spectral (fast)</option>
+                    <option value="wpe">WPE (quality, slow)</option>
+                  </select>
+                </label>
+                <label class="ctl"><span class="ctl-lab">Denoise strength <span id="prodResidualVal" class="ctl-val">0.6</span></span>
+                  <input type="range" id="prodResidual" class="inp inp-range" min="0" max="1" step="0.05" value="0.6">
+                </label>
+                <label class="ctl ctl-chk"><input type="checkbox" id="prodTrack" checked><span>Noise-robust tracking</span></label>
+                <label class="ctl ctl-chk"><input type="checkbox" id="prodEq" checked><span>EQ</span></label>
+                <label class="ctl ctl-chk"><input type="checkbox" id="prodReport"><span>Generate report</span></label>
+              </div>
+
               <details class="ctl ctl-advanced">
                 <summary>Advanced</summary>
                 <label class="ctl"><span class="ctl-lab">Off-axis blend <span id="prodBlendVal" class="ctl-val">0.60</span></span>
@@ -294,7 +318,7 @@
                 <label class="ctl ctl-chk"><input type="checkbox" id="prodDoaReadout"><span>DOA azimuth readout (diagnostic)</span></label>
                 <label class="ctl ctl-chk"><input type="checkbox" id="prodCfar" title="CA-CFAR adaptive local noise floor for the speech mask — helps under non-stationary noise (HVAC swells, fans, knocks). Experimental."><span>CFAR adaptive noise floor (experimental)</span></label>
               </details>
-              <div class="ctl ctl-speaker">
+              <div class="ctl ctl-speaker ctl-group">
                 <div class="ctl-lab-row">
                   <span class="ctl-lab">Target speaker</span>
                   <button class="btn btn-ghost btn-xs" id="detectSpeakersBtn" title="Scan recording for talker directions (SRP-PHAT)">⊕ Detect</button>
@@ -312,6 +336,16 @@
           </div>
 
           <div class="console-transport">
+            <!-- Level-matched A/B: one playhead, instant RAW⇄CLEAN switch so the
+                 comparison isn't confounded by a loudness difference. -->
+            <div class="ab-bar" id="abBar">
+              <button class="ab-play" id="abPlay" title="Play / pause the A/B comparison">▶</button>
+              <div class="ab-switch" role="tablist" aria-label="Compare raw vs clean">
+                <button class="ab-opt" id="abRaw" data-ab="raw" role="tab" aria-selected="true">RAW</button>
+                <button class="ab-opt active" id="abClean" data-ab="clean" role="tab" aria-selected="false">CLEAN</button>
+              </div>
+              <span class="ab-hint" id="abHint">level-matched · press <kbd>A</kbd> to flip</span>
+            </div>
             <div class="track" data-kind="raw">
               <div class="track-head"><span class="track-tag track-tag-raw">RAW</span><span class="track-sub" id="trackInputSub">8-channel mix</span></div>
               <div class="track-wave" id="waveInput"></div>
@@ -369,5 +403,6 @@ window.OCTOVOX_ENV = {
 <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
 <script src="/static/shell.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/ux.js"></script>
 </body>
 </html>

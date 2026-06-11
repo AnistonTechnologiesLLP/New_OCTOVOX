@@ -15,7 +15,7 @@ from scipy.io import wavfile
 from flask import Blueprint, jsonify, request, send_file, Response
 from werkzeug.utils import secure_filename
 
-from ..config import INPUT_DIR, OUTPUT_DIR, ASSET_DIR, STATIC_DIR
+from ..config import INPUT_DIR, OUTPUT_DIR, ASSET_DIR, STATIC_DIR, TRASH_DIR
 from ..services import pipeline as ov
 from ..services import clean_cascade as cascade
 from ..services import prod_pipeline as prod
@@ -267,8 +267,24 @@ def list_input():
     return jsonify(files=files)
 
 
+def _prune_trash(keep=20):
+    """Keep the trash bounded — drop all but the newest ``keep`` entries."""
+    import shutil
+    try:
+        entries = sorted([d for d in TRASH_DIR.iterdir() if d.is_dir()],
+                         key=lambda d: d.stat().st_mtime, reverse=True)
+        for old in entries[keep:]:
+            shutil.rmtree(old, ignore_errors=True)
+    except Exception:
+        pass
+
+
 @api_bp.route("/delete", methods=["POST"])
 def delete_file():
+    """Soft-delete: move the .wav (and its derived output dir) into the trash so
+    the action is UNDOABLE via /api/restore. Returns a ``restore_token`` the
+    frontend surfaces as an "Undo" affordance. Trash is pruned to the newest 20."""
+    import shutil
     data = request.get_json(silent=True) or {}
     name = data.get("filename")
     p = safe_input_name(name)
@@ -276,12 +292,57 @@ def delete_file():
         return jsonify(ok=False, error="invalid filename"), 400
     if not p.exists():
         return jsonify(ok=False, error="not found"), 404
-    p.unlink()
-    # Also delete any output dir derived from this file.
-    out_p = OUTPUT_DIR / p.stem
-    if out_p.exists() and out_p.is_dir():
-        import shutil; shutil.rmtree(out_p)
-    return jsonify(ok=True, deleted=name)
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
+    token = str(uuid.uuid4())[:12]
+    bucket = TRASH_DIR / token
+    bucket.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(p), str(bucket / p.name))
+        out_p = OUTPUT_DIR / p.stem
+        had_output = out_p.exists() and out_p.is_dir()
+        if had_output:
+            shutil.move(str(out_p), str(bucket / ("__output__" + p.stem)))
+        # Record what was trashed so restore knows where to put it back.
+        (bucket / "manifest.json").write_text(json.dumps(
+            {"name": p.name, "stem": p.stem, "had_output": had_output}))
+    except Exception as e:
+        traceback.print_exc()
+        shutil.rmtree(bucket, ignore_errors=True)
+        return jsonify(ok=False, error=f"delete failed: {e}"), 500
+    _prune_trash()
+    return jsonify(ok=True, deleted=name, restore_token=token)
+
+
+@api_bp.route("/restore", methods=["POST"])
+def restore_file():
+    """Undo a soft-delete: move the trashed .wav (and output dir) back. Refuses if
+    a same-named file now exists at the destination (no silent clobber)."""
+    import shutil
+    data = request.get_json(silent=True) or {}
+    token = secure_filename(data.get("token") or "")
+    if not token:
+        return jsonify(ok=False, error="token required"), 400
+    bucket = TRASH_DIR / token
+    manifest = bucket / "manifest.json"
+    if not bucket.is_dir() or not manifest.exists():
+        return jsonify(ok=False, error="nothing to restore (already expired?)"), 404
+    try:
+        meta = json.loads(manifest.read_text())
+        name, stem, had_output = meta["name"], meta["stem"], meta.get("had_output")
+        dst = INPUT_DIR / name
+        if dst.exists():
+            return jsonify(ok=False, error="a file with that name exists again"), 409
+        shutil.move(str(bucket / name), str(dst))
+        if had_output:
+            src_out = bucket / ("__output__" + stem)
+            dst_out = OUTPUT_DIR / stem
+            if src_out.exists() and not dst_out.exists():
+                shutil.move(str(src_out), str(dst_out))
+        shutil.rmtree(bucket, ignore_errors=True)
+        return jsonify(ok=True, restored=name)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(ok=False, error=f"restore failed: {e}"), 500
 
 
 @api_bp.route("/clear_output", methods=["POST"])
@@ -519,6 +580,222 @@ def process_poll_legacy():
 
     threading.Thread(target=worker, daemon=True).start()
     return jsonify(ok=True, job_id=job_id)
+
+
+# Stable map from the pipeline's `_log("prod: …")` messages to the 8 UI stage
+# pills + an approximate completion percentage. Driven off the real stage the
+# pipeline is ENTERING, so the progress bar reflects actual work, not guesses.
+# (key substring → (ui_stage, pct)); first match wins, in declaration order.
+_PROD_STAGE_MAP = [
+    ("loaded",                ("calibrate", 5)),
+    ("mic health",            ("calibrate", 8)),
+    ("channel calibration",   ("calibrate", 12)),
+    ("HPF",                   ("highpass", 20)),
+    ("WPE dereverb",          ("highpass", 26)),
+    ("VAD speech ratio",      ("vad", 34)),
+    ("tracking path",         ("doa", 40)),
+    ("DOA spread",            ("doa", 46)),
+    ("RTF drift",             ("doa", 50)),
+    ("auto blend",            ("beamform", 56)),
+    ("beamform",              ("beamform", 64)),
+    ("AEC",                   ("beamform", 70)),
+    ("feedback risk",         ("beamform", 72)),
+    ("spectral dereverb",     ("nr", 76)),
+    ("NR ",                   ("nr", 84)),
+    ("residual suppressor",   ("nr", 88)),
+    ("automix",               ("automix", 92)),
+    ("AGC",                   ("output", 96)),
+    ("wrote",                 ("output", 98)),
+    ("report",                ("output", 99)),
+]
+
+
+def _map_prod_log(message):
+    """Return {stage, pct} for a pipeline log line, or None if unrecognized."""
+    m = (message or "")
+    low = m.lower()
+    for key, (stage, pct) in _PROD_STAGE_MAP:
+        if key.lower() in low:
+            return {"stage": stage, "pct": pct}
+    return None
+
+
+def _parse_clean_opts(data):
+    """Validate + normalize the /api/clean request body into run_production kwargs.
+
+    Shared by the synchronous /api/clean and the streaming /api/clean_stream so
+    both honour identical defaults and clamping. Returns (kwargs, ref_name) where
+    ``kwargs`` are passed straight to ``prod.run_production`` (minus input/out
+    paths, which the caller resolves), and ``ref_name`` is the raw reference WAV
+    name for the caller to resolve against INPUT_DIR.
+    """
+    nr = str(data.get("nr", "dfn")).lower()
+    if nr not in ("fast", "dfn", "none"):
+        nr = "dfn"
+    beam = str(data.get("beam", "auto")).lower()
+    if beam not in ("auto", "batch", "tracked"):
+        beam = "auto"
+    wpe = bool(data.get("wpe", False))
+    dereverb = data.get("dereverb")
+    if dereverb is not None:
+        dereverb = str(dereverb).lower()
+        if dereverb not in ("none", "spectral", "wpe"):
+            dereverb = "none"
+    eq = bool(data.get("eq", True))
+    agc = str(data.get("agc", "rms")).lower()
+    if agc not in ("perceptual", "rms"):
+        agc = "rms"
+    aec = str(data.get("aec", "partitioned")).lower()
+    if aec not in ("partitioned", "single"):
+        aec = "partitioned"
+    movement = str(data.get("movement", "rtf")).lower()
+    if movement not in ("srp", "rtf"):
+        movement = "rtf"
+    track = str(data.get("track", "conditioned")).lower()
+    if track not in ("conditioned", "audio"):
+        track = "conditioned"
+    mask = str(data.get("mask", "auto")).lower()
+    if mask not in ("snr", "coherent", "auto"):
+        mask = "auto"
+    raw_blend = data.get("mvdr_blend", 0.6)
+    if isinstance(raw_blend, str) and raw_blend.lower() == "auto":
+        mvdr_blend = "auto"
+    else:
+        try:
+            mvdr_blend = max(0.0, min(1.0, float(raw_blend)))
+        except (TypeError, ValueError):
+            mvdr_blend = 0.6
+    if "dfn_atten_lim_db" in data and data.get("dfn_atten_lim_db") is None:
+        dfn_atten_lim_db = None
+    else:
+        try:
+            dfn_atten_lim_db = float(data.get("dfn_atten_lim_db", 32.0))
+        except (TypeError, ValueError):
+            dfn_atten_lim_db = 32.0
+    try:
+        residual = max(0.0, min(1.0, float(data.get("residual", 0.6))))
+    except (TypeError, ValueError):
+        residual = 0.6
+    try:
+        pause_floor_db = float(data.get("pause_floor_db", -40.0))
+    except (TypeError, ValueError):
+        pause_floor_db = -40.0
+    report = bool(data.get("report", False))
+    doa_readout = bool(data.get("doa_readout", False))
+    cfar = bool(data.get("cfar", False))
+    vad_gate = bool(data.get("vad_gate", False))
+    wng_db = None
+    if data.get("wng_db") is not None:
+        try:
+            wng_db = float(data.get("wng_db"))
+        except (TypeError, ValueError):
+            wng_db = None
+    try:
+        wpe_band_hz = float(data.get("wpe_band_hz", 8000.0))
+    except (TypeError, ValueError):
+        wpe_band_hz = 8000.0
+    target_az = None
+    raw_taz = data.get("target_az")
+    if raw_taz is not None:
+        try:
+            target_az = float(raw_taz)
+        except (TypeError, ValueError):
+            target_az = None
+    interferer_az = None
+    raw_iaz = data.get("interferer_az")
+    if raw_iaz is not None:
+        try:
+            interferer_az = [float(a) for a in raw_iaz]
+        except (TypeError, ValueError):
+            interferer_az = None
+
+    kwargs = dict(
+        nr=nr, dfn_atten_lim_db=dfn_atten_lim_db, beam=beam,
+        mvdr_blend=mvdr_blend, wpe=wpe, dereverb=dereverb, eq=eq,
+        agc=agc, aec=aec, movement=movement, track=track, mask=mask,
+        residual=residual, pause_floor_db=pause_floor_db,
+        target_az=target_az, interferer_az=interferer_az,
+        doa_readout=doa_readout, report=report,
+        vad_gate=vad_gate, wng_db=wng_db, wpe_band_hz=wpe_band_hz)
+    return kwargs, cfar, data.get("reference")
+
+
+@api_bp.route("/clean_stream", methods=["POST"])
+def clean_voice_stream():
+    """Streaming variant of /api/clean — NDJSON progress events with REAL stages.
+
+    Runs ``prod.run_production`` in a worker thread, forwarding the pipeline's
+    own ``log`` lines as ``{type:'progress', stage, pct, message}`` events, then
+    a final ``{type:'done', ...}`` carrying the identical payload /api/clean
+    returns (so the frontend renders results exactly the same way). The synchronous
+    /api/clean is preserved untouched for any caller that wants a single response.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    fname = data.get("filename")
+    if not fname:
+        return jsonify(ok=False, error="filename required"), 400
+    wav_path = INPUT_DIR / secure_filename(fname)
+    if not wav_path.exists():
+        return jsonify(ok=False, error=f"file not found: {fname}"), 404
+
+    kwargs, cfar, ref_name = _parse_clean_opts(data)
+    ref_path = None
+    if ref_name:
+        cand = INPUT_DIR / secure_filename(ref_name)
+        if cand.exists():
+            ref_path = cand
+
+    from queue import Queue, Empty
+    q = Queue()
+    state = {"result": None, "error": None}
+
+    def log_cb(msg):
+        evt = _map_prod_log(msg)
+        q.put({"type": "progress", "message": str(msg),
+               "stage": (evt or {}).get("stage"), "pct": (evt or {}).get("pct")})
+
+    def worker():
+        cfar_token = ov.set_cfar_mask(cfar)
+        try:
+            result = prod.run_production(
+                wav_path, OUTPUT_DIR, reference_path=ref_path, log=log_cb, **kwargs)
+            state["result"] = result
+        except Exception as e:
+            traceback.print_exc()
+            state["error"] = str(e)
+        finally:
+            ov.reset_cfar_mask(cfar_token)
+            q.put(None)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def stream():
+        while True:
+            try:
+                ev = q.get(timeout=60)
+            except Empty:
+                yield json.dumps({"type": "progress", "message": "still working…",
+                                  "stage": None, "pct": None}) + "\n"
+                continue
+            if ev is None:
+                if state.get("error"):
+                    yield json.dumps({"type": "error", "message": state["error"]}) + "\n"
+                else:
+                    r = state["result"]
+                    yield json.dumps({
+                        "type": "done", "ok": True,
+                        "clean": f"/output/{r['stem']}/{r['clean_name']}",
+                        "input": f"/output/{r['stem']}/{r['input_name']}",
+                        "report": (f"/output/{r['stem']}/{r['report_name']}"
+                                   if r.get("report_name") else None),
+                        "stem": r["stem"], "stages": r["stages"],
+                        "timings": r["timings"], "sr": r["sr"],
+                        "n_channels": r["n_channels"], "elapsed_s": r["elapsed_s"],
+                    }) + "\n"
+                return
+            yield json.dumps(ev) + "\n"
+
+    return Response(stream(), mimetype="application/x-ndjson")
 
 
 @api_bp.route("/clean", methods=["POST"])

@@ -129,28 +129,27 @@ function setupHeroTypewriter() {
     `<b style="color:var(--violet)">DeepFilterNet3</b> does the denoising — natural-sounding voice with no robotic, musical-noise artifacts.`,
     `Built for the <b style="color:var(--teal)">sensiBel SB-POLARIS</b> 8-mic optical MEMS array — 48 kHz, 24-bit.`,
   ];
-  let idx = 0, char = 0, deleting = false, paused = false, plain = null;
+  // Type the lead message ONCE, then settle — a constantly-cycling header is
+  // restless on a console you scan while recording. Honour reduced-motion by
+  // showing the final text immediately. (Cycling-forever behaviour removed.)
   const plainOf = (h) => { const d = document.createElement("div"); d.innerHTML = h; return d.textContent || ""; };
-  function tick() {
-    if (paused) return setTimeout(tick, 200);
-    const html = MSGS[idx];
-    if (plain === null) plain = plainOf(html);
-    if (!deleting) {
-      char++;
-      if (char <= plain.length) { el.textContent = plain.slice(0, char); setTimeout(tick, 28 + Math.random()*22); }
-      else { el.innerHTML = html; deleting = true; setTimeout(tick, 3200); }
-    } else {
-      char--;
-      if (char > 0) { el.textContent = plain.slice(0, char); setTimeout(tick, 14); }
-      else { deleting = false; idx = (idx + 1) % MSGS.length; plain = null; setTimeout(tick, 350); }
+  const html = MSGS[0];
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    el.innerHTML = html;
+    const cur = qs(".lead-cursor"); if (cur) cur.style.display = "none";
+    return;
+  }
+  const plain = plainOf(html);
+  let char = 0;
+  (function type() {
+    char++;
+    if (char <= plain.length) { el.textContent = plain.slice(0, char); setTimeout(type, 26 + Math.random()*20); }
+    else {
+      el.innerHTML = html;          // swap in the styled version and stop
+      const cur = qs(".lead-cursor");
+      if (cur) setTimeout(() => { cur.style.transition = "opacity .4s"; cur.style.opacity = "0"; }, 1200);
     }
-  }
-  const tag = qs(".hero-tag");
-  if (tag) {
-    tag.addEventListener("mouseenter", () => paused = true);
-    tag.addEventListener("mouseleave", () => paused = false);
-  }
-  tick();
+  })();
 }
 
 
@@ -181,6 +180,11 @@ function refreshThemedJsColors() {
 
 
 /* ═══════════════════ TABS ═══════════════════ */
+function selectCaptureTab(name) {
+  const t = qs(`.tab[data-tab="${name}"]`);
+  if (t) t.click();
+}
+
 function setupTabs() {
   qsa(".tab").forEach(t => {
     t.addEventListener("click", () => {
@@ -191,6 +195,24 @@ function setupTabs() {
       if (panel) panel.classList.add("active");
     });
   });
+
+  // Mobile-first: live multi-channel Record needs the 8-mic array, which a phone
+  // never has — so on narrow screens lead with Sample (CSS reorders the tabs too)
+  // unless the user has explicitly chosen a tab this session. Deferred to the
+  // next frame so layout/media-queries have settled (robust to load-time width).
+  const applyMobileDefault = () => {
+    try {
+      const isSmall = matchMedia("(max-width: 640px)").matches;
+      if (isSmall && !sessionStorage.getItem("octovox.tabChosen")) {
+        selectCaptureTab("sample");
+      }
+    } catch {}
+  };
+  requestAnimationFrame(applyMobileDefault);
+  // record that the user made an explicit tab choice (so we stop overriding it)
+  qsa(".tab").forEach(t => t.addEventListener("pointerdown", () => {
+    try { sessionStorage.setItem("octovox.tabChosen", "1"); } catch {}
+  }));
 }
 
 
@@ -589,6 +611,23 @@ async function processFile(filename) {
   return runProduction(filename);
 }
 
+/** Undo a soft-delete — restore the trashed file (and its results) and refresh. */
+async function restoreDeleted(token, fname) {
+  try {
+    const r = await fetch("/api/restore", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    toast(`Restored ${j.restored || fname} ✓`);
+    refreshFiles();
+    loadVerdict();
+  } catch (err) {
+    toast(`Couldn't restore: ${err.message || "unknown error"}`, "error");
+  }
+}
+
 function showProgress(msg) {
   $("progressBlock").classList.remove("hidden");
   $("progressTitle").textContent = msg;
@@ -611,7 +650,7 @@ function showProgress(msg) {
   }
 }
 
-function updateProgress(msg, pct) {
+function updateProgress(msg, pct, explicitStage) {
   $("progressTitle").textContent = msg || "Working…";
   if (pct != null && pct >= 0) {
     const p = Math.max(0, Math.min(100, pct));
@@ -623,10 +662,14 @@ function updateProgress(msg, pct) {
   }
   // Sticky sub-line — the in-flight stage message (different from title)
   $("spSub") && ($("spSub").textContent = msg || "working…");
-  let activeStage = null;
-  for (const [stage, keys] of Object.entries(STAGE_KEYWORDS)) {
-    if (keys.some(k => (msg || "").toLowerCase().includes(k.toLowerCase()))) {
-      activeStage = stage; break;
+  // Prefer the server-supplied stage id (reliable); fall back to keyword match
+  // for the legacy streaming path that doesn't send one.
+  let activeStage = explicitStage || null;
+  if (!activeStage) {
+    for (const [stage, keys] of Object.entries(STAGE_KEYWORDS)) {
+      if (keys.some(k => (msg || "").toLowerCase().includes(k.toLowerCase()))) {
+        activeStage = stage; break;
+      }
     }
   }
   if (activeStage) {
@@ -878,9 +921,17 @@ function renderFilesList(files, wMap) {
               if (window.Shell.router.current === "studio") window.Shell.router.navigate("library");
             }
           }
-          toast(`Deleted ${fname} ✓`);
           refreshFiles();
           loadVerdict();
+          // Offer an Undo — the file is in the trash, not gone, so this restores it.
+          if (j.restore_token) {
+            toast(`Deleted ${fname}`, "ok", {
+              duration: 8000,
+              action: { label: "Undo", onClick: () => restoreDeleted(j.restore_token, fname) },
+            });
+          } else {
+            toast(`Deleted ${fname} ✓`);
+          }
         } else {
           toast("Delete failed: " + (j.error || "?"), "error");
         }
@@ -1280,6 +1331,41 @@ function applyProdPreset(name) {
 }
 
 /** Wire live readouts + the preset selector for the pipeline control knobs. */
+/* ── Studio settings persistence ───────────────────────────────────────────
+ * Remember the user's last knob positions so a returning user doesn't redo the
+ * same setup. Reference (file-specific) and Report (per-run intent) are excluded.
+ * value-type inputs use .value; checkboxes use .checked. */
+const PROD_PERSIST_IDS = [
+  "prodPreset", "prodNr", "prodBeam", "prodMovement", "prodMask", "prodAgc",
+  "prodAec", "prodDereverb", "prodResidual", "prodBlend", "prodDfnCap",
+  "prodPauseFloor", "prodTrack", "prodEq", "prodDoaReadout", "prodCfar",
+];
+const PROD_SETTINGS_KEY = "octovox.studioSettings.v1";
+
+function saveProdSettings() {
+  const data = {};
+  PROD_PERSIST_IDS.forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    data[id] = (el.type === "checkbox") ? el.checked : el.value;
+  });
+  try { localStorage.setItem(PROD_SETTINGS_KEY, JSON.stringify(data)); } catch {}
+}
+
+function restoreProdSettings() {
+  let data;
+  try { data = JSON.parse(localStorage.getItem(PROD_SETTINGS_KEY) || "null"); } catch { data = null; }
+  if (!data) return;
+  PROD_PERSIST_IDS.forEach(id => {
+    const el = $(id);
+    if (!el || !(id in data)) return;
+    if (el.type === "checkbox") el.checked = !!data[id];
+    else el.value = data[id];
+    // fire input so dependent live-labels (slider readouts) update to match
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 function setupProdControls() {
   const r = $("prodResidual"), rv = $("prodResidualVal");
   if (r && rv) {
@@ -1315,6 +1401,18 @@ function setupProdControls() {
       });
     });
   }
+  // Persist + restore the user's last-used Studio settings across sessions so
+  // they don't re-set the same knobs every time. Reference (file-specific) and
+  // Report (a per-run intent) are intentionally NOT persisted.
+  restoreProdSettings();
+  PROD_PERSIST_IDS.forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener("change", saveProdSettings);
+  });
+  // sliders fire 'input' continuously — save on release via 'change' (above),
+  // which range inputs also emit, so no extra listener is needed.
+
   populateReferencePicker();
   // Speaker detection + clear buttons
   const detectBtn = $("detectSpeakersBtn");
@@ -1409,12 +1507,9 @@ async function runProduction(filename) {
   const opts = getProdOpts();
   showProgress(`Cleaning voice (${opts.nr})…`);
   try {
-    const r = await fetch("/api/clean", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, ...opts }),
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    // Stream REAL per-stage progress from the pipeline (NDJSON). Falls back to
+    // the synchronous /api/clean if streaming is unavailable mid-flight.
+    const j = await cleanStreaming(filename, opts);
     qsa(".ps").forEach(s => s.classList.add("done"));
     hideProgress();
     renderProduction(j);
@@ -1433,6 +1528,75 @@ async function runProduction(filename) {
   } finally {
     Busy.release();
   }
+}
+
+/** Run the clean via the streaming endpoint, driving the real stage pills as
+ *  the pipeline reports them. Resolves with the final `done` payload (same
+ *  shape /api/clean returns). Rejects on a pipeline error event or transport
+ *  failure — but if the stream never starts (e.g. proxy buffering), it falls
+ *  back to a single synchronous /api/clean so the clean still completes. */
+async function cleanStreaming(filename, opts) {
+  let r;
+  try {
+    r = await fetch("/api/clean_stream", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, ...opts }),
+    });
+  } catch (e) {
+    return cleanSynchronous(filename, opts);   // network/transport failure
+  }
+  if (!r.ok || !r.body) {
+    // Endpoint missing or non-streaming — degrade gracefully.
+    if (r.status === 404) return cleanSynchronous(filename, opts);
+    let msg = `HTTP ${r.status}`;
+    try { const j = await r.json(); msg = j.error || msg; } catch {}
+    throw new Error(msg);
+  }
+
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", done = null, gotAnyEvent = false;
+  while (true) {
+    const { value, done: streamDone } = await reader.read();
+    if (streamDone) break;
+    buf += dec.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      gotAnyEvent = true;
+      if (ev.type === "progress") {
+        updateProgress(stripProdPrefix(ev.message), ev.pct, ev.stage);
+      } else if (ev.type === "error") {
+        throw new Error(ev.message || "pipeline error");
+      } else if (ev.type === "done") {
+        done = ev;
+      }
+    }
+  }
+  if (done && done.ok) return done;
+  // Stream closed without a usable result — fall back rather than fail silently.
+  if (!gotAnyEvent) return cleanSynchronous(filename, opts);
+  throw new Error("clean stream ended without a result");
+}
+
+/** Single-shot clean (legacy path) — used as the streaming fallback. */
+async function cleanSynchronous(filename, opts) {
+  const r = await fetch("/api/clean", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename, ...opts }),
+  });
+  const j = await r.json();
+  if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+/** "prod: beamform 8→1 (…)" → "beamform 8→1 (…)" for a tidier progress line. */
+function stripProdPrefix(msg) {
+  return String(msg || "").replace(/^prod:\s*/i, "");
 }
 
 /** Render the production result JSON into the results section. */
@@ -1604,7 +1768,114 @@ function loadABPlayers(inputUrl, cleanUrl, inputSub, cleanSub) {
       if (btn) { btn.textContent = "▶"; btn.classList.remove("playing"); }
     });
   });
+
+  setupABCompare();
 }
+
+/* ── Level-matched A/B comparison ───────────────────────────────────────────
+ * Both players run in lock-step from one playhead; only the SELECTED source is
+ * audible (the other is muted to volume 0). Each is loudness-normalized to a
+ * common RMS target so "sounds cleaner" can't be confused with "sounds louder".
+ * The per-track ▶ buttons still work for solo listening; this adds an instant
+ * flip on top. Pressing `A` toggles RAW⇄CLEAN. */
+const AB = { side: "clean", rawGain: 1, cleanGain: 1, ready: 0 };
+
+function rmsOfBuffer(ws) {
+  try {
+    const buf = ws.getDecodedData && ws.getDecodedData();
+    if (!buf) return null;
+    const ch = buf.getChannelData(0);
+    // sample up to ~50k points for speed; RMS is stable on a decimated read
+    const step = Math.max(1, Math.floor(ch.length / 50000));
+    let sum = 0, k = 0;
+    for (let i = 0; i < ch.length; i += step) { sum += ch[i] * ch[i]; k++; }
+    return k ? Math.sqrt(sum / k) : null;
+  } catch { return null; }
+}
+
+function applyABVolumes() {
+  if (state.wsInput)  state.wsInput.setVolume(AB.side === "raw"   ? AB.rawGain   : 0);
+  if (state.wsWinner) state.wsWinner.setVolume(AB.side === "clean" ? AB.cleanGain : 0);
+}
+
+function computeABGains() {
+  const TARGET = 0.08;                       // common RMS target (~−22 dBFS)
+  const rRaw = rmsOfBuffer(state.wsInput);
+  const rClean = rmsOfBuffer(state.wsWinner);
+  // Cap make-up gain so a near-silent file can't blast; floor avoids /0.
+  const g = r => (r && r > 1e-5) ? Math.min(4, Math.max(0.25, TARGET / r)) : 1;
+  AB.rawGain = g(rRaw);
+  AB.cleanGain = g(rClean);
+  applyABVolumes();
+}
+
+function setupABCompare() {
+  const bar = $("abBar"), play = $("abPlay");
+  if (!bar || !play) return;
+  AB.side = "clean"; AB.ready = 0;
+  syncABButtons();
+
+  // Recompute loudness once each player has decoded its audio.
+  const onReady = () => { AB.ready++; computeABGains(); };
+  if (state.wsInput)  state.wsInput.on("ready", onReady);
+  if (state.wsWinner) state.wsWinner.on("ready", onReady);
+
+  const setSide = side => {
+    AB.side = side;
+    applyABVolumes();
+    syncABButtons();
+  };
+  $("abRaw").onclick = () => setSide("raw");
+  $("abClean").onclick = () => setSide("clean");
+
+  play.onclick = () => {
+    const active = AB.side === "raw" ? state.wsInput : state.wsWinner;
+    const other  = AB.side === "raw" ? state.wsWinner : state.wsInput;
+    if (!active) return;
+    const playing = active.isPlaying();
+    // stop the solo per-track buttons' state from lingering
+    qsa(".track-play").forEach(b => { b.textContent = "▶"; b.classList.remove("playing"); });
+    if (playing) {
+      if (state.wsInput) state.wsInput.pause();
+      if (state.wsWinner) state.wsWinner.pause();
+      play.textContent = "▶"; play.classList.remove("playing");
+    } else {
+      // start BOTH from the active player's position so a mid-play flip is gapless
+      const t = active.getCurrentTime ? active.getCurrentTime() : 0;
+      applyABVolumes();
+      [state.wsInput, state.wsWinner].forEach(ws => {
+        if (!ws) return;
+        try { ws.setTime ? ws.setTime(t) : ws.seekTo(0); } catch {}
+        ws.play();
+      });
+      play.textContent = "❚❚"; play.classList.add("playing");
+    }
+  };
+
+  [state.wsInput, state.wsWinner].forEach(ws => {
+    if (!ws) return;
+    ws.on("finish", () => { play.textContent = "▶"; play.classList.remove("playing"); });
+  });
+}
+
+function syncABButtons() {
+  const raw = $("abRaw"), clean = $("abClean");
+  if (raw)   { raw.classList.toggle("active", AB.side === "raw");     raw.setAttribute("aria-selected", AB.side === "raw"); }
+  if (clean) { clean.classList.toggle("active", AB.side === "clean"); clean.setAttribute("aria-selected", AB.side === "clean"); }
+}
+
+/* Keyboard: `A` flips the A/B source when the Studio is open and not typing. */
+window.addEventListener("keydown", e => {
+  if (e.key !== "a" && e.key !== "A") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (isTypingInField()) return;
+  if (!state.wsInput || !state.wsWinner) return;
+  if (window.Shell && window.Shell.router && window.Shell.router.current !== "studio") return;
+  e.preventDefault();
+  AB.side = (AB.side === "raw") ? "clean" : "raw";
+  applyABVolumes();
+  syncABButtons();
+});
 
 
 /* Friendly label + one-line detail for each production stage key. */
@@ -1706,28 +1977,33 @@ function esc(s) {
   }[m]));
 }
 
-function toast(msg, type) {
+/* toast(msg, type, opts?)
+ *   opts.action = { label, onClick }  → renders an inline action button (e.g. Undo)
+ *   opts.duration                     → override auto-dismiss ms (action toasts last longer)
+ * Backward compatible: existing toast(msg, type) calls are unaffected. */
+function toast(msg, type, opts) {
   const wrap = $("toastWrap");
   if (!wrap) return;
+  opts = opts || {};
 
-  // Dedup: same exact message within 1.2 s = ignore (prevents spam)
+  // Dedup: same exact message within 1.2 s = ignore (prevents spam). Toasts
+  // carrying an action skip dedup so a real Undo is never swallowed.
   const now = Date.now();
-  if (toast._last && toast._last.msg === msg && (now - toast._last.ts) < 1200) {
+  if (!opts.action && toast._last && toast._last.msg === msg && (now - toast._last.ts) < 1200) {
     return;
   }
   toast._last = { msg, ts: now };
 
   const t = document.createElement("div");
   t.className = "toast" + (type ? " " + type : "");
-  // preserve line breaks from server errors
-  t.style.whiteSpace = "pre-wrap";
-  t.textContent = msg;
 
-  // dismiss button
-  const close = document.createElement("button");
-  close.className = "toast-close";
-  close.setAttribute("aria-label", "Dismiss notification");
-  close.textContent = "×";
+  // message text (kept as its own node so the action button sits beside it)
+  const text = document.createElement("span");
+  text.className = "toast-text";
+  text.style.whiteSpace = "pre-wrap";
+  text.textContent = msg;
+  t.appendChild(text);
+
   let dismissed = false;
   const dismiss = () => {
     if (dismissed) return; dismissed = true;
@@ -1736,11 +2012,29 @@ function toast(msg, type) {
     t.style.transform = "translateX(40px)";
     setTimeout(() => t.remove(), 350);
   };
+
+  // optional inline action (e.g. Undo)
+  if (opts.action && typeof opts.action.onClick === "function") {
+    const act = document.createElement("button");
+    act.className = "toast-action";
+    act.textContent = opts.action.label || "Undo";
+    act.addEventListener("click", () => {
+      try { opts.action.onClick(); } finally { dismiss(); }
+    });
+    t.appendChild(act);
+  }
+
+  // dismiss button
+  const close = document.createElement("button");
+  close.className = "toast-close";
+  close.setAttribute("aria-label", "Dismiss notification");
+  close.textContent = "×";
   close.addEventListener("click", dismiss);
   t.appendChild(close);
 
   wrap.appendChild(t);
-  const dur = type === "error" ? 7000 : type === "warn" ? 6000 : 3000;
+  const dur = opts.duration != null ? opts.duration
+            : type === "error" ? 7000 : type === "warn" ? 6000 : 3000;
   setTimeout(dismiss, dur);
 }
 

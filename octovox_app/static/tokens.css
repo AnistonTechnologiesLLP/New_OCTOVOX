@@ -95,6 +95,71 @@
   --teal:var(--accent);           --teal-dim:var(--teal-600);  --teal-glow:var(--accent-ring);
   --violet:var(--violet-400);     --blue:var(--blue-400);
   --amber:var(--warn);            --red:var(--danger);         --green:var(--success);
+
+  /* ===================== NEUMORPHISM (soft-UI) LAYER =====================
+     A tactile soft-console surface system layered on top of the semantic
+     tokens above. `:root` carries the DARK neumorphic palette (the app's
+     default theme); `[data-theme="light"]` overrides it below. Components in
+     style.css reference --neo-* for surfaces/shadows/radii while continuing
+     to use --accent / --text / status tokens for colour, so the existing
+     light/dark split and the JS-read viz tokens keep working untouched.
+
+     Dual-shadow model: a LIGHT highlight (top-left) + a DARK shadow
+     (bottom-right) on a single mid-tone surface produce the raised look;
+     inverting them (inset) produces the pressed look. */
+
+  /* dark neumorphic surfaces — deep, low-contrast console tones */
+  --neo-bg:#12171d;
+  --neo-surface:#161c23;
+  --neo-surface-raised:#1b232c;
+  --neo-surface-inset:#10151b;
+  --neo-text:var(--text);
+  --neo-muted:var(--text-muted);
+  --neo-accent:var(--accent);
+  --neo-accent-2:var(--blue-400);
+
+  --neo-shadow-light:rgba(255,255,255,0.045);
+  --neo-shadow-dark:rgba(0,0,0,0.55);
+
+  /* shadow recipes (reference the light/dark vars so the theme swap is free) */
+  --neo-shadow-raised:
+    8px 8px 18px var(--neo-shadow-dark),
+    -8px -8px 16px var(--neo-shadow-light);
+  --neo-shadow-soft:
+    5px 5px 12px var(--neo-shadow-dark),
+    -5px -5px 10px var(--neo-shadow-light);
+  --neo-shadow-inset:
+    inset 5px 5px 11px var(--neo-shadow-dark),
+    inset -5px -5px 10px var(--neo-shadow-light);
+  /* shallow press for small controls (buttons/chips) */
+  --neo-shadow-inset-sm:
+    inset 3px 3px 6px var(--neo-shadow-dark),
+    inset -3px -3px 6px var(--neo-shadow-light);
+  /* accent-tinted glow for primary CTAs / active emphasis */
+  --neo-glow-accent:
+    6px 6px 14px var(--neo-shadow-dark),
+    -6px -6px 12px var(--neo-shadow-light),
+    0 6px 20px -8px var(--accent-ring);
+
+  --neo-radius-xl:28px;
+  --neo-radius-lg:22px;
+  --neo-radius-md:16px;
+  --neo-radius-sm:12px;
+}
+
+/* ===================== NEUMORPHISM — LIGHT THEME ===================== */
+[data-theme="light"] {
+  --neo-bg:#e9eef5;
+  --neo-surface:#e9eef5;
+  --neo-surface-raised:#eef3f9;
+  --neo-surface-inset:#dfe6ef;
+  --neo-text:var(--text);
+  --neo-muted:var(--text-muted);
+  --neo-accent:var(--accent);
+  --neo-accent-2:#2f7fd1;
+
+  --neo-shadow-light:rgba(255,255,255,0.92);
+  --neo-shadow-dark:rgba(163,177,198,0.55);
 }
 
 /* ============================ LIGHT THEME ============================ */

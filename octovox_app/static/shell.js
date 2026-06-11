@@ -65,16 +65,27 @@
     refreshGate() {
       const item = document.querySelector('.nav-item[data-view="studio"]');
       if (item) item.classList.toggle("nav-item-gated", !this.isStudioReady());
+      this.syncStudioEmpty();
+    },
+    // Show the empty placeholder until a file has been cleaned; otherwise show
+    // the console. Keeps the Studio reachable without a confusing bounce.
+    syncStudioEmpty() {
+      const ready = this.isStudioReady();
+      const empty = $("studioEmpty");
+      const caption = document.querySelector("#viewStudio .studio-caption");
+      const main = document.querySelector("#viewStudio .console-main");
+      if (empty) empty.classList.toggle("hidden", ready);
+      if (caption) caption.classList.toggle("hidden", !ready);
+      if (main) main.classList.toggle("hidden", !ready);
     },
     navigate(view) {
       if (!VIEWS.includes(view)) view = "capture";
-      if (view === "studio" && !this.isStudioReady()) {
-        try { toast("Clean a file first to open the Studio.", "warn"); } catch (e) {}
-        view = (this.current && this.current !== "studio") ? this.current : "capture";
-      }
       this.current = view;
       qsa(".view").forEach(v => v.classList.toggle("view--active", v.dataset.view === view));
       qsa(".nav-item[data-view]").forEach(n => n.classList.toggle("active", n.dataset.view === view));
+      // Studio is reachable even before a clean — it shows a friendly empty
+      // state instead of bouncing the user back. Toggle empty vs. console.
+      if (view === "studio") this.syncStudioEmpty();
       const m = META[view] || { title: view, sub: "" };
       if ($("wsTitle")) $("wsTitle").textContent = m.title;
       if ($("wsSub")) $("wsSub").textContent = m.sub;
@@ -229,9 +240,18 @@
     // nav-items use href="#/view" → hashchange drives the router; no extra handler needed,
     // except the external Acoustics link which is a real navigation (left as-is).
     qsa(".nav-item[data-view]").forEach(n => n.addEventListener("click", e => {
-      // let the hash change handle routing, but for the gated studio give instant feedback
-      if (n.dataset.view === "studio" && !Router.isStudioReady()) { e.preventDefault(); Router.navigate("studio"); }
+      // Studio now opens to an empty state when nothing is cleaned yet —
+      // route normally (no bounce, no special-casing needed).
     }));
+    // Empty-Studio call-to-action buttons.
+    const go = $("studioEmptyGo");
+    if (go) go.addEventListener("click", () => Router.navigate("library"));
+    const samp = $("studioEmptySample");
+    if (samp) samp.addEventListener("click", () => {
+      Router.navigate("capture");
+      selectTab("sample");
+      const b = $("sampleBtn"); if (b) { b.focus(); b.click(); }
+    });
   }
 
   function afterAppInit() {
