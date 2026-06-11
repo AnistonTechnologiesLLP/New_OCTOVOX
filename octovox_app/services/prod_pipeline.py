@@ -64,6 +64,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy.signal as sps
+from scipy.special import exp1            # E1 exponential integral — OM-LSA gain
 
 # Reuse the cascade's validated I/O + beamformers + neural wrappers wholesale.
 from .clean_cascade import (
@@ -1215,6 +1216,145 @@ def dd_wiener(x, fs, alpha=0.985, floor_db=-9.0, noise_pct=12.0, smooth_bins=3):
         return np.asarray(x, dtype=np.float32)
 
 
+# =========================================================================
+#  NEAR-DFN SPECTRAL NR — OM-LSA + CA-CFAR + Silero speech-presence (CPU-fast)
+# =========================================================================
+def _align_vad_probs(vad_probs, T):
+    """Interpolate Silero per-frame speech probabilities onto a T-frame STFT grid.
+
+    ``vad_probs`` is computed at stage [4] on the array-downmix STFT grid, whose
+    frame count differs slightly from a fresh ``boundary='zeros'`` STFT (measured
+    184 vs 189 on a 1 s clip). We resample over a NORMALIZED [0,1] index rather
+    than truncate — truncation would misalign speech frames by several frames and
+    drop the tail. Returns ``(T,)`` float32 in [0,1], or ``None`` when no usable
+    probabilities were supplied (so the caller degrades to energy-only OM-LSA).
+    """
+    if vad_probs is None:
+        return None
+    v = np.asarray(vad_probs, dtype=np.float32).reshape(-1)
+    if v.size == 0:
+        return None
+    v = np.clip(v, 0.0, 1.0)
+    if v.size == T:
+        return v
+    src = np.linspace(0.0, 1.0, num=v.size, endpoint=True)
+    dst = np.linspace(0.0, 1.0, num=T,      endpoint=True)
+    return np.interp(dst, src, v).astype(np.float32)
+
+
+def omlsa_vad_nr(mono, fs, vad_probs=None, alpha=0.985, gmin_db=-18.0,
+                 gamma_thresh=2.0, nu_min=1e-3, nu_max=500.0,
+                 noise_pct=12.0, smooth_bins=3, use_cfar=False):
+    """OM-LSA noise reduction with Silero speech-presence weighting — a CPU-fast
+    "near-DeepFilterNet3" denoiser that needs NO neural enhancement model.
+
+    Three classical pieces, combined to approach DFN3 on *non-stationary* noise
+    while staying about as cheap as :func:`dd_wiener`:
+
+      · **OM-LSA gain** (Ephraim–Malah log-spectral amplitude; Cohen 2003). The
+        decision-directed a-priori SNR ξ is smoothed across time (ξ ← α·prev_clean
+        /noise + (1−α)·max(γ−1,0), α≈0.985 — exactly the :func:`dd_wiener` recursion)
+        and drives the LSA gain ``G_lsa = ξ/(1+ξ)·exp(½·E1(ν))`` with ν = ξ/(1+ξ)·γ.
+        ν is clamped to ``[nu_min, nu_max]`` and ``G_lsa`` is hard-capped at 1 — it
+        is a *suppression* gain, and without the cap the E1 boost blows up to ~750×
+        as ν→0 and would turn the denoiser into a noise amplifier.
+      · **CA-CFAR adaptive floor** (OPTIONAL, off by default). Blended SAFELY as
+        ``noise = max(quiet_frame_PSD, cfar_local_floor)`` so CFAR can only RAISE
+        the floor, never lower it below the robust quiet-frame estimate — CFAR-alone
+        measured as a regression on real recordings (see ``estimate_softmask`` and
+        the ``/api/clean`` CFAR note). Gated by the caller via ``use_cfar``.
+      · **Speech-presence probability** ``p`` fuses a per-bin energy SPP (logistic on
+        log-SNR vs ``gamma_thresh``) with the already-computed Silero ``vad_probs``
+        (no second VAD pass). Cohen's OM modification ``G = G_lsa**p · Gmin**(1−p)``
+        keeps a natural floor (``Gmin`` = ``gmin_db``) in the gaps. With
+        ``vad_probs=None`` it degrades to an energy-only OM-LSA — still a real denoiser.
+
+    Edge-spike-safe (boundary='zeros'/True, see :func:`dd_wiener`), finite-checked,
+    and clamped to the input envelope. Pure DSP, so it works at any ``fs`` (unlike
+    DFN's 48 kHz lock), though the STFT params are tuned for 48 kHz. Never raises —
+    returns the input unchanged on error. Returns the denoised mono (same length).
+    """
+    try:
+        x = np.asarray(mono, dtype=np.float32).reshape(-1)
+        if len(x) < NFFT:
+            return x
+        f, t, Z = sps.stft(x, fs=fs, nperseg=NFFT, noverlap=NFFT - HOP,
+                           window=WIN, boundary="zeros", padded=True)
+        mag = np.abs(Z); ph = np.angle(Z)
+        P = mag ** 2
+        F, T = P.shape
+        # ── noise PSD from the quietest frames (per-bin), like dd_wiener ──
+        frame_e = P.mean(axis=0)
+        thr = np.percentile(frame_e, noise_pct)
+        quiet = frame_e <= max(thr, EPS)
+        if quiet.sum() < 3:
+            noise = np.percentile(P, noise_pct, axis=1, keepdims=True)
+        else:
+            noise = P[:, quiet].mean(axis=1, keepdims=True)
+        noise = np.maximum(noise, EPS)
+        noise = np.broadcast_to(noise, P.shape).copy()      # (F,T)
+        # ── optional CA-CFAR adaptive floor: SAFE blend (CFAR may only RAISE it) ──
+        if use_cfar:
+            try:
+                from . import pipeline as ov
+                local = ov.cfar_local_floor(P, xp=np, train_t=12, train_f=0,
+                                            guard_t=2, guard_f=0)
+                if local is not None:
+                    noise = np.maximum(noise, np.asarray(local, dtype=P.dtype))
+            except Exception:
+                pass                                        # keep the quiet-frame floor
+        gfloor = 10.0 ** (gmin_db / 20.0)                   # amplitude floor (Gmin)
+        xi_floor = 10.0 ** (gmin_db / 10.0)                 # power a-priori-SNR floor
+        gamma = P / noise                                   # a-posteriori SNR (F,T)
+        # per-bin energy speech-presence prob (logistic on log-SNR vs threshold)
+        spp = 1.0 / (1.0 + np.exp(-(np.log(gamma + EPS) - np.log(gamma_thresh))))
+        # fuse with Silero VAD (interp onto THIS grid; never truncate). The
+        # 0.3+0.7·v blend (combine_vad_with_softmask) stops the VAD hard-zeroing
+        # bins the energy SPP is confident about.
+        v = _align_vad_probs(vad_probs, T)
+        if v is not None:
+            p = np.clip(spp * (0.3 + 0.7 * v[None, :]), 0.0, 1.0)
+        else:
+            p = np.clip(spp, 0.0, 1.0)
+        # Decision-directed ξ recursion drives the WIENER gain (loop, like
+        # dd_wiener). The expensive LSA gain (E1) is then computed ONCE over the
+        # whole (F,T) array — the recursion only needs the Wiener estimate, so we
+        # keep the per-frame loop cheap and vectorize the exp1.
+        Gw = np.empty_like(P)
+        prev_clean = np.maximum(P[:, 0] - noise[:, 0], 0.0)
+        for nft in range(T):
+            gpost = gamma[:, nft]
+            if nft == 0:
+                xi = np.maximum(gpost - 1.0, 0.0)
+            else:
+                xi = alpha * (prev_clean / noise[:, nft]) + (1.0 - alpha) * np.maximum(gpost - 1.0, 0.0)
+            xi = np.maximum(xi, xi_floor)
+            gw = xi / (1.0 + xi)                            # Wiener gain from smoothed ξ
+            Gw[:, nft] = gw
+            prev_clean = (gw * mag[:, nft]) ** 2            # feed back the clean estimate
+        # OM-LSA log-spectral-amplitude gain (vectorized): G_lsa = Gw·exp(½·E1(ν)),
+        # ν = Gw·γ, clamped, and HARD-CAPPED at 1 (it is a suppression gain — the
+        # E1 boost explodes to ~750× as ν→0 without this).
+        nu = np.clip(Gw * gamma, nu_min, nu_max)
+        g_lsa = np.minimum(Gw * np.exp(0.5 * exp1(nu)), 1.0)
+        # Cohen OM speech-presence floor: keep a natural Gmin bed in the gaps.
+        G = (g_lsa ** p) * (gfloor ** (1.0 - p))
+        if smooth_bins and smooth_bins > 1:                 # light spectral smoothing
+            k = np.ones(smooth_bins, dtype=np.float32) / smooth_bins
+            G = np.apply_along_axis(lambda c: np.convolve(c, k, mode="same"), 0, G)
+        _, y = sps.istft(G * mag * np.exp(1j * ph), fs=fs, nperseg=NFFT,
+                         noverlap=NFFT - HOP, window=WIN, boundary=True)
+        if len(y) < len(x):
+            y = np.pad(y, (0, len(x) - len(y)))
+        if not np.all(np.isfinite(y)):
+            return x                                        # belt-and-braces guard
+        peak = float(np.max(np.abs(x)) + EPS)
+        return np.clip(y[:len(x)], -peak, peak).astype(np.float32)
+    except Exception as e:
+        print(f"[WARN] omlsa_vad_nr failed: {e}")
+        return np.asarray(mono, dtype=np.float32)
+
+
 def residual_suppress(x, fs, strength=0.6, noise_pct=10.0,
                       smooth_bins=3, smooth_frames=3):
     """Residual stationary-noise suppressor — a gentle SECOND pass that runs
@@ -1317,10 +1457,15 @@ def run_production(input_path, out_dir, *, reference_path=None,
     reference_path : str | Path | None
         Optional far-end loudspeaker reference WAV for stage [7] AEC. When None
         (the usual case for mic-only OCTOVOX recordings) AEC is a clean skip.
-    nr : "dfn" | "fast" | "none"
+    nr : "dfn" | "omlsa" | "fast" | "none"
         Noise-reduction engine (stage [8b]). ``dfn`` = DeepFilterNet3 (the
         DEFAULT — neural, natural-sounding voice with no musical noise; on this
-        hardware it is barely slower than the spectral path). ``fast`` = the
+        hardware it is barely slower than the spectral path). ``omlsa`` = the
+        :func:`omlsa_vad_nr` CPU-fast "near-DFN" path (OM-LSA log-spectral
+        amplitude + Silero speech-presence weighting + optional CA-CFAR adaptive
+        floor) — no neural enhancement model, much closer to ``dfn`` on
+        non-stationary noise than ``fast``, and it is also the automatic fallback
+        whenever ``dfn`` can't run (not installed / sr≠48k). ``fast`` = the
         decision-directed :func:`dd_wiener` (quick, no neural cost, and far less
         'robotic' than plain spectral subtraction). ``none`` = beam only.
     dfn_atten_lim_db : float | None
@@ -1784,8 +1929,24 @@ def run_production(input_path, out_dir, *, reference_path=None,
 
     # ── [8b] noise reduction (single channel) ─────────────────────────
     def _nr():
+        # CPU-fast OM-LSA + Silero-SPP path — also the graceful fallback whenever
+        # DFN can't run, so we never ship raw mono when NR was requested. CFAR is
+        # gated by the existing per-request override (the prodCfar UI checkbox).
+        def _run_omlsa(extra=None):
+            out = omlsa_vad_nr(mono.astype(np.float32), sr, vad_probs=vad_probs,
+                               use_cfar=ov._cfar_enabled())
+            o = np.asarray(out, dtype=np.float32).reshape(-1)
+            if len(o) < n: o = np.pad(o, (0, n - len(o)))
+            meta = {"ran": True, "engine": "omlsa_vad",
+                    "vad_used": bool(vad_probs is not None),
+                    "cfar": bool(ov._cfar_enabled())}
+            if extra: meta.update(extra)
+            return o[:n], meta
+
         if nr == "none":
             return mono, {"ran": False, "reason": "disabled (nr=none)"}
+        if nr == "omlsa":
+            return _run_omlsa()
         if nr == "dfn":
             if getattr(ov, "_DFN_AVAILABLE", False) and sr == SR_DFN:
                 out = _dfn_enhance(mono.astype(np.float32), sr, atten_lim_db=dfn_atten_lim_db)
@@ -1794,8 +1955,10 @@ def run_production(input_path, out_dir, *, reference_path=None,
                     if len(o) < n: o = np.pad(o, (0, n - len(o)))
                     return o[:n], {"ran": True, "engine": "DeepFilterNet3",
                                    "atten_lim_db": dfn_atten_lim_db}
-                return mono, {"ran": False, "reason": "DFN enhance returned None"}
-            return mono, {"ran": False, "reason": "DFN unavailable / sr≠48k"}
+                # DFN present but produced nothing → OM-LSA rather than raw mono.
+                return _run_omlsa({"reason": "DFN returned None → OM-LSA fallback"})
+            # DFN unavailable / sr≠48k → OM-LSA (pure DSP, rate-agnostic).
+            return _run_omlsa({"reason": "DFN unavailable/sr≠48k → OM-LSA fallback"})
         # fast spectral NR — decision-directed (low musical-noise, non-robotic)
         out = dd_wiener(mono.astype(np.float32), sr)
         o = np.asarray(out, dtype=np.float32).reshape(-1)

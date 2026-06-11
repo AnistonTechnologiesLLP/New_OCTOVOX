@@ -1312,8 +1312,12 @@ const PROD_PRESETS = {
   // movement detectors (rtf_drift + tracking-path conditioning) are skipped
   // entirely — a documented tradeoff (won't follow a fast-moving talker) for
   // the lowest runtime (~0.33× real-time here vs ~0.44× for quality).
-  quality: { nr: "dfn",  beam: "auto",  mask: "auto",     residual: 0.6,  dereverb: "none" },
-  fast:    { nr: "fast", beam: "batch", mask: "coherent", residual: 0.45, dereverb: "none" },
+  // balanced: DF3-quality spatial path (auto beam + never-worse mask) but the
+  // CPU-fast OM-LSA+VAD denoiser instead of neural DFN3 — close to quality on
+  // non-stationary noise, no torch/DFN cost, runs near the fast path.
+  quality:  { nr: "dfn",   beam: "auto",  mask: "auto",     residual: 0.6,  dereverb: "none" },
+  balanced: { nr: "omlsa", beam: "auto",  mask: "auto",     residual: 0.55, dereverb: "none" },
+  fast:     { nr: "fast",  beam: "batch", mask: "coherent", residual: 0.45, dereverb: "none" },
 };
 
 /** Apply a named preset to the individual control elements (guarded — a missing

@@ -16,6 +16,7 @@ from octovox_app.services.prod_pipeline import (
     condition_tracking_path, track_doa, dereverb_spectral, dd_wiener,
     spatial_coherence, beamform_masked, residual_suppress,
     detect_talker_directions, extract_direction,
+    omlsa_vad_nr, _align_vad_probs,
 )
 from octovox_app.services import pipeline as _ov
 from octovox_app.services.pipeline import POLARIS_UCA_M, SPEED_SOUND
@@ -505,3 +506,79 @@ def test_extract_direction_fallback_on_mono_input():
     out = extract_direction(src, FS, POLARIS_UCA_M[:1], az_deg=0.0)
     assert out.ndim == 1
     assert np.all(np.isfinite(out))
+
+
+# ---------------------------------------------------------------------------
+#  omlsa_vad_nr  (CPU-fast "near-DFN" OM-LSA + Silero-SPP noise reduction)
+# ---------------------------------------------------------------------------
+def test_omlsa_no_edge_spike_and_finite():
+    """Like dd_wiener: bounded by the input envelope (no ISTFT edge blow-up),
+    finite, same length."""
+    x = _speech_like(2 * FS, seed=70)
+    out = omlsa_vad_nr(x, FS)
+    assert len(out) == len(x)
+    assert np.max(np.abs(out)) <= np.max(np.abs(x)) + 1e-4
+    assert np.all(np.isfinite(out))
+
+
+def test_omlsa_cuts_bed_keeps_voice():
+    """Default (energy-only) OM-LSA must bite the stationary bed (silent halves)
+    while leaving the voice essentially intact."""
+    x, gate = _voice_plus_bed()
+    out = omlsa_vad_nr(x, FS)
+    sil, spk = gate <= 0, gate > 0
+    bed_in = np.sqrt(np.mean(x[sil] ** 2)); bed_out = np.sqrt(np.mean(out[sil] ** 2))
+    v_in = np.sqrt(np.mean(x[spk] ** 2));   v_out = np.sqrt(np.mean(out[spk] ** 2))
+    assert 20 * np.log10(bed_out / bed_in) < -6.0          # bed down ≥ 6 dB
+    assert 20 * np.log10(v_out / v_in) > -1.5              # voice within 1.5 dB
+
+
+def test_omlsa_never_raises_on_edge_inputs():
+    """Empty / shorter-than-NFFT / all-silence / all-ones must return a finite
+    array and never raise."""
+    for sig in (np.zeros(0, np.float32), np.zeros(256, np.float32),
+                np.zeros(FS, np.float32), np.ones(FS, np.float32)):
+        out = omlsa_vad_nr(sig, FS)
+        assert np.all(np.isfinite(out))
+
+
+def test_omlsa_vad_optional_and_grid_mismatch():
+    """Runs with vad_probs=None (energy-only) AND with a deliberately
+    mismatched-length vad_probs (exercises the interpolation, never truncation)."""
+    x, gate = _voice_plus_bed(seed=12)
+    # mismatched length on purpose (shorter than the NR STFT frame count)
+    vad = np.zeros(123, dtype=np.float32); vad[40:90] = 1.0
+    y_none = omlsa_vad_nr(x, FS, vad_probs=None)
+    y_vad = omlsa_vad_nr(x, FS, vad_probs=vad)
+    for y in (y_none, y_vad):
+        assert len(y) == len(x)
+        assert np.all(np.isfinite(y))
+        assert np.max(np.abs(y)) <= np.max(np.abs(x)) + 1e-4
+
+
+def test_omlsa_cfar_runs_and_is_bounded():
+    """The optional CFAR adaptive floor (off by default, experimental) must still
+    produce a finite, length-preserving, envelope-bounded output. Note: CFAR is
+    NOT guaranteed to suppress more — the OM-LSA speech-presence floor makes the
+    gain non-monotonic in the noise estimate (raising noise lowers SPP, pulling
+    the gain toward Gmin), which is why it stays opt-in and off by default; the
+    real on/off comparison lives in tools/omlsa_eval.py on real clips."""
+    x, _ = _voice_plus_bed(seed=13)
+    y = omlsa_vad_nr(x, FS, use_cfar=True)
+    assert len(y) == len(x)
+    assert np.all(np.isfinite(y))
+    assert np.max(np.abs(y)) <= np.max(np.abs(x)) + 1e-4
+
+
+def test_align_vad_probs_interpolates_and_clamps():
+    """Interpolates onto T frames over a normalized index; None → None; range
+    stays in [0,1]."""
+    assert _align_vad_probs(None, 100) is None
+    assert _align_vad_probs(np.zeros(0, np.float32), 100) is None
+    v = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    out = _align_vad_probs(v, 9)
+    assert out.shape == (9,)
+    assert out.min() >= 0.0 and out.max() <= 1.0
+    # exact-length input is returned (clamped) unchanged in length
+    same = _align_vad_probs(np.linspace(0, 1, 50, dtype=np.float32), 50)
+    assert same.shape == (50,)

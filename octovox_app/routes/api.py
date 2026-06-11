@@ -630,7 +630,7 @@ def _parse_clean_opts(data):
     name for the caller to resolve against INPUT_DIR.
     """
     nr = str(data.get("nr", "dfn")).lower()
-    if nr not in ("fast", "dfn", "none"):
+    if nr not in ("fast", "dfn", "omlsa", "none"):
         nr = "dfn"
     beam = str(data.get("beam", "auto")).lower()
     if beam not in ("auto", "batch", "tracked"):
@@ -815,6 +815,8 @@ def clean_voice():
 
     Speed-first knobs (all optional):
       · ``nr``   : "dfn" (DeepFilterNet3, default — natural, the slow stage) |
+                   "omlsa" (OM-LSA + Silero speech-presence, CPU-fast "near-DFN";
+                   also the automatic fallback when DFN can't run) |
                    "fast" (decision-directed Wiener, no neural cost) | "none".
       · ``beam`` : "auto" (default — batch RTF-MVDR, switching to the tracked beam
                    only on genuine sustained movement; faster and higher-SNR on
@@ -872,7 +874,7 @@ def clean_voice():
         return jsonify(ok=False, error=f"file not found: {fname}"), 404
 
     nr = str(data.get("nr", "dfn")).lower()
-    if nr not in ("fast", "dfn", "none"):
+    if nr not in ("fast", "dfn", "omlsa", "none"):
         nr = "dfn"
     beam = str(data.get("beam", "auto")).lower()
     if beam not in ("auto", "batch", "tracked"):

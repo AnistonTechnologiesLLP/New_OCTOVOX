@@ -230,6 +230,7 @@
                 <label class="ctl"><span class="ctl-lab">Preset</span>
                   <select id="prodPreset" class="inp">
                     <option value="quality" selected>Quality (DFN3, full)</option>
+                    <option value="balanced">Balanced (OM-LSA, no DF3)</option>
                     <option value="fast">Fast (low runtime)</option>
                     <option value="custom">Custom</option>
                   </select>
@@ -241,6 +242,7 @@
                 <label class="ctl"><span class="ctl-lab">Noise reduction</span>
                   <select id="prodNr" class="inp">
                     <option value="dfn" selected>Natural — DeepFilterNet3</option>
+                    <option value="omlsa">Near-natural — OM-LSA + VAD (no DF3)</option>
                     <option value="fast">Fast — decision-directed</option>
                     <option value="none">None (beam only)</option>
                   </select>
