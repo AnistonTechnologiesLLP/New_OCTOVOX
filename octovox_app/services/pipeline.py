@@ -453,7 +453,7 @@ def estimate_softmask(X, prog=None):
     return M
 
 
-def _compute_csm_masked_impl(X, mask, xp):
+def _compute_csm_masked_impl(X, mask, xp, noise_mask=None):
     """
     Backend-agnostic masked covariance build (works with NumPy or CuPy).
 
@@ -461,13 +461,18 @@ def _compute_csm_masked_impl(X, mask, xp):
     weighted Gram matrices Φ = (X·w)^H_t X summed over frames, which is a
     single batched matmul (F,C,T)·(F,T,C) → (F,C,C) per class — no per-bin
     Python loop, and no (F,T,C,C) intermediate that would blow past GPU RAM.
+
+    ``noise_mask`` — optional (F,T) weights for the NOISE covariance. Default
+    None keeps the historical complement ``1 − mask``; supplying it lets the
+    caller exclude VAD-confirmed speech frames from Φ_v (the energy mask alone
+    under-shoots on speech-dense clips, leaking speech into the noise model).
     """
     F, T, C = X.shape
     Xx = xp.asarray(X)                       # (F,T,C)
     mx = xp.asarray(mask)                     # (F,T)
     Xc = xp.conj(Xx)
     wx = mx
-    wv = 1.0 - mx
+    wv = (1.0 - mx) if noise_mask is None else xp.asarray(noise_mask)
     # num[f] = Σ_t w·X X^H  ==  (w·X)^T_t · conj(X)
     num_x = xp.matmul(xp.swapaxes(Xx * wx[:, :, None], 1, 2), Xc)
     num_v = xp.matmul(xp.swapaxes(Xx * wv[:, :, None], 1, 2), Xc)
@@ -478,13 +483,51 @@ def _compute_csm_masked_impl(X, mask, xp):
     return _asnumpy(phi_x), _asnumpy(phi_v)
 
 
-def compute_csm_masked(X, mask):
+def compute_csm_masked(X, mask, noise_mask=None):
     if GPU_DSP:
         try:
-            return _compute_csm_masked_impl(X, mask, _cupy)
+            return _compute_csm_masked_impl(X, mask, _cupy, noise_mask=noise_mask)
         except Exception:
             pass     # any GPU hiccup → fall back to CPU for this call
-    return _compute_csm_masked_impl(X, mask, np)
+    return _compute_csm_masked_impl(X, mask, np, noise_mask=noise_mask)
+
+
+def vad_gated_noise_mask(mask, vad_probs, hangover_s=0.15, fs=None,
+                         keep=0.15, min_frames_frac=0.05):
+    """Noise-covariance weights with VAD-confirmed speech frames suppressed.
+
+    The energy soft-mask's complement ``1 − mask`` is the historical noise
+    weight, but on speech-dense clips its 10th-percentile floor IS speech, so
+    Φ_v absorbs target energy and the MVDR "whitens" the talker. This builds a
+    safer noise weight: ``(1 − mask) · (keep + (1−keep)·(1 − vad_dilated))`` —
+    frames Silero flags as speech (dilated by ``hangover_s`` each side so word
+    edges never leak in) contribute only ``keep`` of their weight to Φ_v.
+
+    SAFETY: if the gated weights would leave fewer than ``min_frames_frac`` of
+    the frames' worth of effective noise weight (a clip that is wall-to-wall
+    speech), returns None so the caller falls back to the plain complement —
+    a starved Φ_v is worse than a contaminated one.
+
+    ``mask`` is (F,T); ``vad_probs`` is (T',) on the same STFT frame grid.
+    Returns an (F,T) float32 weight array, or None (caller falls back).
+    """
+    if vad_probs is None:
+        return None
+    F, T = mask.shape
+    v = np.zeros(T, dtype=np.float32)
+    Tn = min(T, len(vad_probs))
+    v[:Tn] = np.asarray(vad_probs[:Tn], dtype=np.float32)
+    speech = v > 0.5
+    # Dilate by the hangover so onsets/trailing consonants stay out of Φ_v.
+    hop_s = HOP / float(fs or FS_REQUIRED)
+    k = max(1, int(round(hangover_s / hop_s)))
+    dil = np.convolve(speech.astype(np.float32), np.ones(2 * k + 1), mode="same") > 0
+    gate = keep + (1.0 - keep) * (1.0 - dil.astype(np.float32))     # (T,)
+    wv = ((1.0 - mask) * gate[None, :]).astype(np.float32)
+    # Starvation guard: need a usable amount of noise evidence per bin.
+    if float(wv.sum()) < min_frames_frac * F * T:
+        return None
+    return wv
 
 
 def regularise(csm, eps_rel=1e-3):
@@ -956,10 +999,24 @@ def _estimate_rtf_tracked_impl(X, phi_v, mask, ref, beta, xp):
 # =============================================================================
 #  BEAMFORMERS  (6 different optimisations)
 # =============================================================================
-def bf_mvdr(rtf, phi_v):
-    """w = Phi_v^-1 h / (h^H Phi_v^-1 h)"""
+def bf_mvdr(rtf, phi_v, min_wng_db=None):
+    """w = Phi_v^-1 h / (h^H Phi_v^-1 h)
+
+    ``min_wng_db`` — optional white-noise-gain floor (robust MVDR). Plain MVDR
+    puts no bound on ``w^H w``: when Φ_v is ill-conditioned (low-SNR bins,
+    diffuse reverb) the solve can return weights with huge norm that amplify
+    uncorrelated noise at that bin. The classic fix (Cox 1987, "robust adaptive
+    beamforming") is to require a minimum white-noise gain
+    ``WNG = |w^H h|² / ‖w‖² = 1/‖w‖²`` (distortionless ⇒ |w^H h| = 1). We
+    enforce it by ITERATIVE DIAGONAL LOADING — multiply the loading ×10 until
+    the bin satisfies the floor (≤6 iterations; heavy loading converges to the
+    matched filter, whose WNG is the array's maximum) — which preserves the
+    distortionless constraint exactly, unlike post-scaling ``w``.
+    ``None`` (default) keeps the historical unconstrained behaviour.
+    """
     F, C = rtf.shape
     w = np.zeros((F, C), dtype=np.complex64)
+    wng_floor = None if min_wng_db is None else 10.0 ** (min_wng_db / 10.0)
     for f in range(F):
         # Two-tier robust solve: standard, then strong-loaded retry,
         # then identity fallback only if both fail. Previously fell
@@ -969,7 +1026,25 @@ def bf_mvdr(rtf, phi_v):
             w[f] = np.eye(1, C, 0).flatten().astype(np.complex64)
             continue
         denom = np.conj(rtf[f]) @ v
-        w[f] = (v / denom) if abs(denom) > EPS else np.eye(1, C, 0).flatten()
+        wf = (v / denom) if abs(denom) > EPS else np.eye(1, C, 0).flatten()
+        if wng_floor is not None:
+            # WNG floor: ‖w‖² must stay ≤ 1/wng_floor. Re-solve with growing
+            # diagonal loading until satisfied (or the iteration cap hits).
+            tr = float(np.real(np.trace(phi_v[f]))) / max(C, 1)
+            load = max(1e-3 * tr, 1e-10)
+            for _ in range(6):
+                if float(np.real(np.vdot(wf, wf))) <= 1.0 / wng_floor:
+                    break
+                load *= 10.0
+                A = phi_v[f] + np.eye(C, dtype=phi_v.dtype) * load
+                v2, _ = safe_solve_with_loading(A, rtf[f], name="mvdr-wng")
+                if v2 is None:
+                    break
+                d2 = np.conj(rtf[f]) @ v2
+                if abs(d2) <= EPS:
+                    break
+                wf = v2 / d2
+        w[f] = wf
     return w
 
 
@@ -2168,7 +2243,10 @@ def process_file(wav_path, out_root, manual_gain_db=None, geometry=None,
     prog.info(f"Loaded {x.shape[1]}ch × {x.shape[0]} samples @ {fs} Hz "
               f"({x.shape[0]/fs:.2f}s)", pct=3)
     if fs != FS_REQUIRED:
-        prog.warn(f"Sample rate {fs} ≠ 48000 Hz")
+        raise ValueError(
+            f"Sample rate {fs} Hz ≠ required {FS_REQUIRED} Hz. "
+            f"The Polaris array is fixed-rate; the STFT and DOA stages "
+            f"assume {FS_REQUIRED} Hz. Re-export at {FS_REQUIRED} Hz.")
     if x.shape[1] != N_CH:
         raise ValueError(f"Need 8-channel input, got {x.shape[1]}")
 

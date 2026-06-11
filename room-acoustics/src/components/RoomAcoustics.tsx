@@ -19,26 +19,64 @@ import {
   type SurfaceKey,
 } from '../acoustics';
 
-/** Colour for the measured-RT60 overlay (contrasts with the category bars). */
-const MEASURED_COLOR = '#e7eef4';
+/** Read a CSS custom property off <html> — live, so the SVG charts follow the
+ *  shared design tokens (and the light/dark theme) without hard-coded colours. */
+function cssVar(name: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
 
-/** Theme colours (kept here so the engine stays presentation-free). */
+/** Chart colours, read live from the design tokens (getters → re-read every
+ *  render). Paired with useThemeTick() so charts recolour when the theme flips. */
 const C = {
-  optimal: '#34d399',
-  lively: '#f5b14b',
-  reverberant: '#f06363',
-  grid: 'rgba(255,255,255,0.07)',
-  axis: '#6f8090',
-  value: '#aebac6',
-  band: 'rgba(45,212,191,0.10)',
-  baseline: '#26343f',
-} as const;
+  get optimal() { return cssVar('--viz-optimal', '#34d399'); },
+  get lively() { return cssVar('--viz-lively', '#f5b14b'); },
+  get reverberant() { return cssVar('--viz-reverberant', '#f06363'); },
+  get grid() { return cssVar('--viz-grid', 'rgba(255,255,255,0.07)'); },
+  get axis() { return cssVar('--viz-axis', '#6f8090'); },
+  get value() { return cssVar('--text-muted', '#aebac6'); },
+  get band() { return cssVar('--accent-weak', 'rgba(45,212,191,0.10)'); },
+  get baseline() { return cssVar('--border-strong', '#26343f'); },
+  get measured() { return cssVar('--viz-measured', '#e7eef4'); },
+  get strokeBg() { return cssVar('--viz-stroke-bg', '#0c1318'); },
+};
 
 const AXIS_COLORS: Record<RoomMode['axis'], string> = {
-  L: '#2dd4bf',
-  W: '#a78bfa',
-  H: '#5eb0ef',
+  get L() { return cssVar('--viz-series-l', '#2dd4bf'); },
+  get W() { return cssVar('--viz-series-w', '#a78bfa'); },
+  get H() { return cssVar('--viz-series-h', '#5eb0ef'); },
 };
+
+/** Force a re-render when <html data-theme> flips so the live cssVar() reads
+ *  above produce the new theme's colours. */
+function useThemeTick(): void {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const mo = new MutationObserver(() => force((n) => n + 1));
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => mo.disconnect();
+  }, []);
+}
+
+/** Light/dark toggle — shares the console's localStorage key + data-theme
+ *  contract, so the choice persists across both pages. */
+function ThemeToggle(): ReactElement {
+  const [mode, setMode] = useState<string>(() =>
+    document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
+  );
+  const flip = (): void => {
+    const next = mode === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('octovox-theme', next); } catch { /* private mode */ }
+    setMode(next);
+  };
+  return (
+    <button className="back theme-toggle-btn" onClick={flip} title="Toggle light / dark">
+      {mode === 'light' ? '☀ Light' : '☾ Dark'}
+    </button>
+  );
+}
 
 /**
  * Thin React presentation layer over the acoustics engine. All computation
@@ -165,12 +203,16 @@ export function RoomAcoustics(): ReactElement {
   }
 
   const dimLabels: Record<keyof RoomDimensions, string> = { L: 'Length', W: 'Width', H: 'Height' };
+  useThemeTick();
 
   return (
     <div className="app">
-      <a className="back" href="/">
-        ↩ OCTOVOX console
-      </a>
+      <div className="topbar-row">
+        <a className="back" href="/">
+          ↩ OCTOVOX console
+        </a>
+        <ThemeToggle />
+      </div>
 
       <header className="hero">
         <h1 className="title">
@@ -377,7 +419,7 @@ function Rt60Chart({
         return (
           <g key={d.band}>
             <rect x={x + 7} y={y} width={bandWidth - 14} height={barHeight} rx={3} fill={color} opacity={0.9} />
-            <rect x={x + 7} y={y} width={bandWidth - 14} height={Math.min(4, barHeight)} rx={3} fill="#fff" opacity={0.18} />
+            <rect x={x + 7} y={y} width={bandWidth - 14} height={Math.min(4, barHeight)} rx={3} fill={C.measured} opacity={0.18} />
             <text x={x + bandWidth / 2} y={height - pad + 16} textAnchor="middle" fontSize={11} fill={C.axis}>
               {d.band}
             </text>
@@ -391,14 +433,14 @@ function Rt60Chart({
         <polyline
           points={points.map((p) => `${p.x},${p.y}`).join(' ')}
           fill="none"
-          stroke={MEASURED_COLOR}
+          stroke={C.measured}
           strokeWidth={2}
           strokeDasharray="5 4"
           opacity={0.9}
         />
       ) : null}
       {points.map((p) => (
-        <circle key={p.x} cx={p.x} cy={p.y} r={4} fill={MEASURED_COLOR} stroke="#0c1318" strokeWidth={1.5} />
+        <circle key={p.x} cx={p.x} cy={p.y} r={4} fill={C.measured} stroke={C.strokeBg} strokeWidth={1.5} />
       ))}
       <text x={width / 2} y={height - 6} textAnchor="middle" fontSize={11} fill={C.axis}>
         Octave band (Hz)
@@ -418,7 +460,7 @@ function ComparisonStrip({ rows }: { rows: readonly RT60Comparison[] }): ReactEl
   return (
     <div className="cmp">
       <div className="cmp-head">
-        Predicted vs measured · <span style={{ color: MEASURED_COLOR }}>○ measured</span> overlaid above
+        Predicted vs measured · <span style={{ color: C.measured }}>○ measured</span> overlaid above
       </div>
       <div className="cmp-grid">
         {rows.map((r) => (
@@ -427,7 +469,7 @@ function ComparisonStrip({ rows }: { rows: readonly RT60Comparison[] }): ReactEl
             <div className="cmp-vals">
               <span title="predicted">{r.predicted.toFixed(2)}</span>
               <span className="cmp-sep">→</span>
-              <span title="measured" style={{ color: MEASURED_COLOR }}>
+              <span title="measured" style={{ color: C.measured }}>
                 {r.measured === null ? '—' : r.measured.toFixed(2)}
               </span>
             </div>
@@ -507,7 +549,7 @@ function Legend({ measured = false }: { measured?: boolean }): ReactElement {
       ))}
       {measured ? (
         <span className="legend-item">
-          <span className="legend-swatch" style={{ background: MEASURED_COLOR, borderRadius: '50%' }} />
+          <span className="legend-swatch" style={{ background: C.measured, borderRadius: '50%' }} />
           measured
         </span>
       ) : null}

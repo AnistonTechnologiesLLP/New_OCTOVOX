@@ -20,6 +20,8 @@ ASSET_DIR    = STATIC_DIR / "uploads"          # user-uploaded mic photos
 DATA_DIR   = BASE_DIR / "data"
 INPUT_DIR  = DATA_DIR / "input"
 OUTPUT_DIR = DATA_DIR / "output"
+# Soft-delete staging area so deletes are undoable (see /api/delete + /api/restore).
+TRASH_DIR  = DATA_DIR / ".trash"
 
 # Upload ceiling (mirrors the original app: 500 MB).
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024
@@ -36,3 +38,4 @@ def ensure_dirs():
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
+    TRASH_DIR.mkdir(parents=True, exist_ok=True)
