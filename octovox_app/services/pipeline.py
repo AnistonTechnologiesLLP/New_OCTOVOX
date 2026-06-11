@@ -2243,7 +2243,10 @@ def process_file(wav_path, out_root, manual_gain_db=None, geometry=None,
     prog.info(f"Loaded {x.shape[1]}ch × {x.shape[0]} samples @ {fs} Hz "
               f"({x.shape[0]/fs:.2f}s)", pct=3)
     if fs != FS_REQUIRED:
-        prog.warn(f"Sample rate {fs} ≠ 48000 Hz")
+        raise ValueError(
+            f"Sample rate {fs} Hz ≠ required {FS_REQUIRED} Hz. "
+            f"The Polaris array is fixed-rate; the STFT and DOA stages "
+            f"assume {FS_REQUIRED} Hz. Re-export at {FS_REQUIRED} Hz.")
     if x.shape[1] != N_CH:
         raise ValueError(f"Need 8-channel input, got {x.shape[1]}")
 

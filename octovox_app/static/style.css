@@ -620,6 +620,59 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--neo-surface);
   .studio-empty-actions { flex-direction: column; }
 }
 
+/* ═══════════════════════════ ERROR LOG (errlog.js) ═══════════════════════════
+   In-app diagnostics modal + unseen-error badge on the Commands trigger. */
+.errlog-root { position: fixed; inset: 0; z-index: 110; display: flex; align-items: flex-start; justify-content: center; }
+.errlog-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(5px); }
+[data-theme="light"] .errlog-backdrop { background: rgba(163,177,198,0.4); }
+.errlog-panel {
+  position: relative; margin-top: 9vh; width: 680px; max-width: calc(100vw - 32px);
+  max-height: 78vh; display: flex; flex-direction: column;
+  background: var(--neo-surface); border-radius: var(--neo-radius-lg);
+  box-shadow: var(--neo-shadow-raised); overflow: hidden;
+  animation: cmdkIn var(--dur) var(--ease-spring);
+}
+.errlog-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--neo-shadow-dark); }
+.errlog-title { font-size: 14px; font-weight: 800; color: var(--neo-text); display: flex; align-items: center; gap: 8px; }
+.errlog-count { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--neo-muted); background: var(--neo-surface-inset); border-radius: var(--radius-pill); padding: 2px 9px; box-shadow: var(--neo-shadow-inset-sm); }
+.errlog-actions { margin-left: auto; display: flex; gap: 8px; }
+.errlog-btn {
+  font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer;
+  border: none; border-radius: var(--neo-radius-sm); padding: 7px 12px;
+  background: var(--neo-surface); color: var(--neo-muted); box-shadow: var(--neo-shadow-soft);
+  transition: box-shadow var(--dur) var(--ease-out), color var(--dur-fast);
+}
+.errlog-btn:hover { color: var(--neo-text); box-shadow: var(--neo-shadow-raised); }
+.errlog-btn:active { box-shadow: var(--neo-shadow-inset-sm); }
+.errlog-x { width: 34px; padding: 7px 0; text-align: center; }
+.errlog-list { overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.errlog-empty { padding: 40px 20px; text-align: center; color: var(--success); font-size: 13px; }
+.errlog-item { background: var(--neo-surface); border-radius: var(--neo-radius-sm); padding: 12px 14px; box-shadow: var(--neo-shadow-soft); position: relative; }
+.errlog-item::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--danger); }
+.errlog-item.warn::before { background: var(--warn); }
+.errlog-item-top { display: flex; align-items: flex-start; gap: 10px; }
+.errlog-tag { font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; padding: 3px 8px; border-radius: var(--radius-pill); flex-shrink: 0; box-shadow: var(--neo-shadow-inset-sm); }
+.errlog-tag-error { color: var(--danger); }
+.errlog-tag-warn { color: var(--warn); }
+.errlog-msg { font-size: 13px; color: var(--neo-text); line-height: 1.5; word-break: break-word; }
+.errlog-mult { font-family: var(--mono); font-size: 11px; color: var(--neo-muted); }
+.errlog-meta { font-family: var(--mono); font-size: 10.5px; color: var(--text-subtle); margin-top: 6px; }
+.errlog-where { color: var(--accent); }
+.errlog-detail { font-family: var(--mono); font-size: 11px; color: var(--neo-muted); margin-top: 8px; padding: 10px; background: var(--neo-surface-inset); border-radius: var(--neo-radius-sm); box-shadow: var(--neo-shadow-inset); white-space: pre-wrap; word-break: break-word; max-height: 180px; overflow-y: auto; }
+.errlog-foot { padding: 11px 18px; border-top: 1px solid var(--neo-shadow-dark); font-size: 11px; color: var(--text-subtle); }
+.errlog-foot kbd { font-size: 10px; }
+
+/* unseen-error badge on the Commands trigger */
+.cmdk-trigger { position: relative; }
+.errlog-dot {
+  position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center; padding: 0 5px;
+  font-family: var(--mono); font-size: 10px; font-weight: 700; line-height: 1;
+  color: #fff; background: var(--danger); border-radius: var(--radius-pill);
+  box-shadow: 0 2px 8px -2px var(--danger); animation: errlogPulse 1.6s ease-in-out infinite;
+}
+@keyframes errlogPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+
 /* ═══════════════════════════ UX LAYER (ux.js) ═══════════════════════════
    Tooltips, in-context help popovers, onboarding coachmark, shortcut hint,
    and button ripple. All reuse the --neo-* soft-UI tokens. */
@@ -740,6 +793,6 @@ kbd { font-family: var(--mono); font-size: 11px; background: var(--neo-surface);
 /* ─────────────────────── REDUCED MOTION ─────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
-  .brand-led, .lead-cursor, .sp-spin, .ps.active { animation: none !important; }
+  .brand-led, .lead-cursor, .sp-spin, .ps.active, .errlog-dot { animation: none !important; }
   .ux-ripple { display: none !important; }
 }

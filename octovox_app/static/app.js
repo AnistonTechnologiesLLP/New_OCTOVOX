@@ -2154,6 +2154,8 @@ function showShortcutsHelp() {
         <div class="sc-key">D</div>     <div class="sc-desc">Delete the focused file</div>
         <div class="sc-key">R</div>     <div class="sc-desc">Refresh files list</div>
         <div class="sc-key">/</div>     <div class="sc-desc">Jump to filter search</div>
+        <div class="sc-key">A</div>     <div class="sc-desc">Flip RAW⇄CLEAN in the Studio</div>
+        <div class="sc-key">E</div>     <div class="sc-desc">Open the error log</div>
         <div class="sc-key">Esc</div>   <div class="sc-desc">Close modal or dismiss toast</div>
         <div class="sc-key">?</div>     <div class="sc-desc">Show this help</div>
       </div>

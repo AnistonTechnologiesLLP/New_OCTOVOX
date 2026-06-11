@@ -131,6 +131,7 @@
       A.push(
         { label: "Open Acoustics", hint: "Tools", run: () => { location.href = "/acoustics"; } },
         { label: "Toggle theme", hint: "View", run: () => Theme.toggle() },
+        { label: "View error log", hint: "Diagnostics", run: () => { try { window.OctovoxErrors && window.OctovoxErrors.open(); } catch (e) {} } },
         { label: "Keyboard shortcuts", hint: "Help", run: () => { try { showShortcutsHelp(); } catch (e) {} } },
       );
       // dynamic: jump-to-file from whatever rows are currently rendered
