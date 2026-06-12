@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-06-12 — New React UI (preview at /ui; legacy UI unchanged at /)
+
+Complete rebuild of the web console as a Vite + React 18 + TypeScript app in `frontend/`
+(same build-into-Flask pattern as `room-acoustics/`). The compiled bundle is committed at
+`octovox_app/static/ui/` and served by a temporary `/ui` route; **the legacy UI at `/` is
+untouched until cutover**. No backend changes beyond that one additive route.
+
+- **Light-first minimal design** (dark mode kept; theme default still follows the OS via the
+  shared `octovox-theme` key). `room-acoustics` tokens were synced and its bundle rebuilt, so
+  `/acoustics` matches.
+- **New IA**: Library is home; Studio is master-detail (`#/studio/<stem>`, deep-linkable, file
+  rail); Capture is a drawer that auto-flows into a streaming clean.
+- **Everything ported** per `frontend/PORTING.md` (the line-cited acceptance contract):
+  streaming NDJSON progress with sync fallback, level-matched A/B (verbatim gain law),
+  speaker radar with 8° snap, presets/persistence (same localStorage keys), winner map,
+  delete-undo, command palette (verbatim fuzzy scorer), shortcuts, error log, onboarding.
+- **New**: per-track spectrogram toggle, inline pipeline timeline, proportional stage-timing
+  bars, engine capability chip driven by `/api/env`, mobile bottom-tab layout.
+- Build: `cd frontend && npm install && npm run build` (emits into `octovox_app/static/ui/`);
+  dev loop: `npm run dev` (Vite proxy to Flask on :5050). Tests: `npm test` (31 unit tests).
+- Cutover plan: once `/ui` is verified (see PORTING.md "Cutover gate"), `pages.py:index()`
+  flips to the new bundle and the legacy template/static files are deleted.
+
 ## 2026-06-10 — Quality pass: measured-knob audit (WPE band ↑, three new opt-in knobs, CFAR verdict)
 
 A measurement-driven quality pass on the production beam path. Every change was scored on

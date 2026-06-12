@@ -22,6 +22,9 @@ New_OCTOVOX/
 ├── run.py                     # top-level launcher (app-factory entrypoint)
 ├── requirements.txt
 ├── README.md
+├── frontend/                  # the console UI (Vite + React + TypeScript)
+│   ├── PORTING.md             # behavioral acceptance contract vs the legacy UI
+│   └── src/                   # builds into octovox_app/static/ui/ (committed)
 ├── octovox_app/               # the Flask application package
 │   ├── __init__.py            # create_app() app-factory
 │   ├── config.py              # paths (input/output/uploads) + server config
@@ -37,16 +40,26 @@ New_OCTOVOX/
 │   │   ├── audio.py           # WAV metadata (wav_info)
 │   │   ├── files.py           # filename / path-traversal safety
 │   │   └── jobs.py            # in-memory job registry for poll endpoints
-│   ├── templates/             # index.html
-│   └── static/                # app.js, style.css, assets/, uploads/
+│   └── static/                # ui/ (built console), acoustics/ (built sub-app), assets/, uploads/
 └── data/
     ├── input/                 # sample WAV recordings (8 ch @ 48 kHz)
     └── output/                # generated per-recording results (starts empty)
 ```
 
-Templates and static assets live inside the package so Flask resolves them from
-the app location. Runtime data lives under `data/`; `data/output/` is created
-empty and populated by the app — old generated results are not carried over.
+Static assets live inside the package so Flask resolves them from the app
+location. The console UI is a React app in `frontend/`; its compiled bundle is
+**committed** at `octovox_app/static/ui/` (same convention as
+`room-acoustics/` → `static/acoustics/`), so the server needs no Node at
+runtime. Rebuild after UI changes:
+
+```bash
+cd frontend && npm install && npm run build   # emits octovox_app/static/ui/
+npm run dev                                   # dev loop: Vite + HMR, /api proxied to :5050
+npm test                                      # UI unit tests (Vitest)
+```
+
+Runtime data lives under `data/`; `data/output/` is created empty and
+populated by the app — old generated results are not carried over.
 
 ---
 
