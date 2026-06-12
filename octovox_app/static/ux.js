@@ -1,17 +1,17 @@
-/* ═══════════════════════════════════════════════════════════════════
-   OCTOVOX — UX layer  (progressive enhancement, loaded after app.js)
+/* ------------------------------------------------------------------
+   OCTOVOX - UX layer  (progressive enhancement, loaded after app.js)
    --------------------------------------------------------------------
    Self-contained: adds discoverability + guidance on top of the existing
    app without touching its logic. Everything here is additive and degrades
-   gracefully — if a hook element is missing, that feature simply no-ops.
+   gracefully - if a hook element is missing, that feature simply no-ops.
 
-     1. Tooltips      — upgrade native title="" into styled hover tooltips
-     2. In-context    — ⓘ help popovers on the Studio control groups
-     3. Onboarding    — first-run "start here" coachmark + richer empties
-     4. Discoverability — persistent "press ? for shortcuts" hint, button ripple
+     1. Tooltips - upgrade native title="" into styled hover tooltips
+     2. In-context - help popovers on the Studio control groups
+     3. Onboarding - first-run "start here" coachmark + richer empties
+     4. Discoverability - persistent "press ? for shortcuts" hint, button ripple
 
    No globals are leaked except window.OctovoxUX (for debugging / re-init).
-═══════════════════════════════════════════════════════════════════ */
+------------------------------------------------------------------ */
 (function () {
   "use strict";
   const $ = id => document.getElementById(id);
@@ -23,7 +23,7 @@
   };
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  /* ───────────────────────── 1 · TOOLTIPS ─────────────────────────
+  /* TOOLTIPS
      Many controls already carry helpful title="" text, but native
      tooltips are slow to appear and unstyled. We move the text into a
      data-attr (so the browser stops showing its own) and render a soft
@@ -48,7 +48,7 @@
       // Scroll / resize invalidate the anchor position.
       window.addEventListener("scroll", () => this.hide(), true);
     },
-    // Promote title="" → data-ux-tip="" once, lazily, so we never fight the
+    // Promote title="" to data-ux-tip="" once, lazily, so we never fight the
     // native tooltip and keep accessibility (we add aria-label as a fallback).
     _promote(node) {
       if (!node.getAttribute) return null;
@@ -93,30 +93,30 @@
     hide() { clearTimeout(this.showT); if (this.el) this.el.classList.remove("show"); },
   };
 
-  /* ──────────────────── 2 · IN-CONTEXT HELP ────────────────────
+  /* IN-CONTEXT HELP
      Plain-language explanations of the DSP controls. Rendered as a small
-     ⓘ button next to each control-group heading; clicking opens a popover
+     Help button next to each control-group heading; clicking opens a popover
      anchored to it. Content is written for a non-DSP user. */
   const HELP = {
     "Preset": {
       title: "Presets",
-      body: "<b>Quality</b> runs the full neural chain (DeepFilterNet3) for the cleanest result — slower. " +
+      body: "<b>Quality</b> runs the full neural chain (DeepFilterNet3) for the cleanest result - slower. " +
             "<b>Fast</b> trades a little quality for much lower runtime. " +
             "<b>Custom</b> appears automatically once you change any knob below.",
       tip: "Not sure? Leave it on Quality.",
     },
-    "Noise · Beam · Movement · Mask": {
+    "Noise / Beam / Movement / Mask": {
       title: "Noise, beam & direction",
-      body: "<b>Noise reduction</b> removes background hiss/hum — <i>Natural</i> sounds best. " +
+      body: "<b>Noise reduction</b> removes background hiss/hum - <i>Natural</i> sounds best. " +
             "<b>Beam</b> focuses the 8 mics on the speaker; <i>Auto</i> handles both still and moving talkers. " +
             "<b>Movement</b> picks how the beam tracks a walking speaker. " +
-            "<b>Mask</b> decides which sound is 'voice' vs 'noise' — <i>Coherence auto</i> is the safe choice.",
+            "<b>Mask</b> decides which sound is 'voice' vs 'noise' - <i>Coherence auto</i> is the safe choice.",
       tip: "Defaults work for most rooms.",
     },
-    "AGC · AEC · Dereverb": {
+    "AGC / AEC / Dereverb": {
       title: "Levelling, echo & room",
       body: "<b>AGC</b> evens out loud/quiet speech to a steady level. " +
-            "<b>AEC</b> cancels echo from a loudspeaker — only active if you pick an <b>AEC reference</b> file. " +
+            "<b>AEC</b> cancels echo from a loudspeaker - only active if you pick an <b>AEC reference</b> file. " +
             "<b>Dereverb</b> reduces 'boomy room' reflections; leave it <i>None</i> in a dry room. " +
             "<b>Denoise strength</b> sets how hard the noise reducer pushes.",
       tip: "AEC does nothing without a reference file.",
@@ -124,7 +124,7 @@
     "Target speaker": {
       title: "Aiming the beam",
       body: "By default OCTOVOX keeps every voice. To isolate one person, click <b>Detect</b> to scan for talkers, " +
-            "then click a chip — or click anywhere on the radar to aim the beam in that direction.",
+            "then click a chip - or click anywhere on the radar to aim the beam in that direction.",
       tip: "Click the radar to steer manually.",
     },
   };
@@ -145,7 +145,7 @@
       window.addEventListener("scroll", () => this.close(), true);
       this.attach();
     },
-    // Add a ⓘ button to every known control-group heading.
+    // Add a help button to every known control-group heading.
     attach() {
       qsa(".ctl-group-head, .ctl-speaker .ctl-lab").forEach(head => {
         const key = head.textContent.trim();
@@ -154,9 +154,9 @@
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "ux-help-btn";
-        // The popover IS the explanation — no redundant hover tooltip on top.
+        // The popover IS the explanation - no redundant hover tooltip on top.
         btn.setAttribute("aria-label", `What is ${data.title}?`);
-        btn.textContent = "ⓘ";
+        btn.textContent = "?";
         btn.addEventListener("click", e => { e.preventDefault(); e.stopPropagation(); this.toggle(btn, data); });
         head.appendChild(btn);
       });
@@ -166,7 +166,7 @@
       this._anchor = anchor;
       this.pop.querySelector(".ux-pop-title").textContent = data.title;
       this.pop.querySelector(".ux-pop-body").innerHTML = data.body;
-      this.pop.querySelector(".ux-pop-tip").textContent = "💡 " + data.tip;
+      this.pop.querySelector(".ux-pop-tip").textContent = "Tip: " + data.tip;
       this.pop.classList.remove("hidden");
       const r = anchor.getBoundingClientRect();
       const pr = this.pop.getBoundingClientRect();
@@ -179,7 +179,7 @@
     close() { if (this.pop) this.pop.classList.add("hidden"); this._anchor = null; },
   };
 
-  /* ──────────────────── 3 · ONBOARDING ────────────────────
+  /* ONBOARDING
      A one-time coachmark pointing first-time users at the primary action,
      plus an upgraded Library empty state with a real call-to-action. */
   const Onboard = {
@@ -202,15 +202,15 @@
       const card = document.createElement("div");
       card.className = "ux-coach";
       card.innerHTML = `
-        <div class="ux-coach-step">Step 1 of 1 · Getting started</div>
+        <div class="ux-coach-step">Step 1 of 1 / Getting started</div>
         <div class="ux-coach-title">Make your first clean voice</div>
         <div class="ux-coach-body">
-          Pick a tab above — <b>Record</b> live, <b>Upload</b> a .wav, or generate a <b>Sample</b> with no
-          hardware — then hit the green button. OCTOVOX runs the full pipeline and drops the result in your Library.
+          Pick a tab above - <b>Record</b> live, <b>Upload</b> a .wav, or generate a <b>Sample</b> with no
+          hardware - then hit the green button. OCTOVOX runs the full pipeline and drops the result in your Library.
         </div>
         <div class="ux-coach-actions">
           <button class="ux-coach-skip" type="button">Dismiss</button>
-          <button class="ux-coach-try" type="button">Try a sample →</button>
+          <button class="ux-coach-try" type="button">Try a sample</button>
         </div>
         <div class="ux-coach-arrow"></div>`;
       document.body.appendChild(card);
@@ -232,7 +232,7 @@
         window.removeEventListener("hashchange", onLeave);
         setTimeout(() => card.remove(), 220);
       };
-      // The coachmark is anchored to the Capture view — if the user navigates
+      // The coachmark is anchored to the Capture view - if the user navigates
       // elsewhere it must not float over an unrelated screen. Mark onboarding
       // as seen so it doesn't pop back up, and tidy up.
       const onLeave = () => { if (!(location.hash || "#/capture").startsWith("#/capture")) done(); };
@@ -261,7 +261,7 @@
     },
   };
 
-  /* ──────────────────── 4 · DISCOVERABILITY ────────────────────
+  /* DISCOVERABILITY
      A subtle, dismissable hint that the command palette + shortcuts exist,
      and a soft ripple on button presses so the UI feels responsive. */
   const Hints = {
@@ -274,8 +274,8 @@
       if (ls.get(this.KEY)) return;
       const bar = document.createElement("div");
       bar.className = "ux-kbd-hint";
-      bar.innerHTML = `<span><kbd>?</kbd> shortcuts · <kbd>⌘K</kbd> commands · <kbd>/</kbd> search</span>
-        <button class="ux-kbd-x" aria-label="Dismiss">×</button>`;
+      bar.innerHTML = `<span><kbd>?</kbd> shortcuts / <kbd>Ctrl K</kbd> commands / <kbd>/</kbd> search</span>
+        <button class="ux-kbd-x" aria-label="Dismiss">X</button>`;
       document.body.appendChild(bar);
       requestAnimationFrame(() => bar.classList.add("show"));
       const close = () => { ls.set(this.KEY, "1"); bar.classList.remove("show"); setTimeout(() => bar.remove(), 220); };
@@ -286,7 +286,7 @@
     buttonRipple() {
       if (reduceMotion) return;
       // Neumorphism already signals press via the inset shadow, so the ripple is
-      // reserved for the accent CTAs where a positive "go" confirmation helps —
+      // reserved for the accent CTAs where a positive "go" confirmation helps -
       // not every surface (which would feel off-language for soft-UI).
       document.addEventListener("pointerdown", e => {
         const btn = e.target.closest && e.target.closest(".btn-primary, .ab-play, .modal-btn.primary");
@@ -306,14 +306,14 @@
     },
   };
 
-  /* ──────────────────── BOOTSTRAP ──────────────────── */
+  /* BOOTSTRAP */
   function boot() {
     Tip.init();
     Help.init();
     Onboard.init();
     Hints.init();
     // Re-attach help buttons after the files/controls re-render (they're
-    // rebuilt by app.js). A light MutationObserver keeps ⓘ buttons present.
+    // rebuilt by app.js). A light MutationObserver keeps help buttons present.
     const obs = new MutationObserver(() => { Help.attach(); Onboard.enrichEmptyState(); });
     const root = qs(".views") || document.body;
     obs.observe(root, { childList: true, subtree: true });

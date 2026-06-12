@@ -1,23 +1,23 @@
-/* ═══════════════════════════════════════════════════════════════════
-   OCTOVOX — In-app error log  (progressive enhancement, loads after app.js)
+/* ------------------------------------------------------------------
+   OCTOVOX - In-app error log  (progressive enhancement, loads after app.js)
    --------------------------------------------------------------------
    A lightweight, self-contained diagnostics panel so you can see what went
    wrong WITHOUT opening the terminal or a log file. It captures from the sinks
-   the app ALREADY uses — no app.js rewrites required:
+   the app ALREADY uses - no app.js rewrites required:
 
-     · window 'error' / 'unhandledrejection'  (uncaught JS + promise failures)
-     · console.error / console.warn           (wrapped, originals still fire —
+     - window 'error' / 'unhandledrejection'  (uncaught JS + promise failures)
+     - console.error / console.warn           (wrapped, originals still fire -
                                                 the app's global trap + every
                                                 catch block console.error()s)
-     · failed fetch() responses                (wrapped — non-2xx API calls)
+     - failed fetch() responses                (wrapped - non-2xx API calls)
 
    Entries are kept in a capped ring buffer mirrored to localStorage (so they
    survive a reload), shown in a modal opened from the command palette
    ("View error log") or with the `E` shortcut. A small dot on the Commands
    trigger flags unseen errors.
 
-   Opt-out: nothing is sent anywhere — this is local-only.
-═══════════════════════════════════════════════════════════════════ */
+   Opt-out: nothing is sent anywhere - this is local-only.
+------------------------------------------------------------------ */
 (function () {
   "use strict";
   const MAX = 50;                         // ring-buffer size
@@ -31,7 +31,7 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
 
-  // ── store ───────────────────────────────────────────────────────────────
+  // store
   const Store = {
     items: [],
     load() {
@@ -75,7 +75,7 @@
   // expose for any code that wants to log explicitly
   window.octovoxLogError = (msg, detail) => record("error", msg, detail);
 
-  // ── capture: hook the existing sinks (originals always still run) ────────
+  // capture: hook the existing sinks (originals always still run)
   function installHooks() {
     window.addEventListener("error", e => {
       const err = e.error;
@@ -88,7 +88,7 @@
              r && r.stack ? r.stack : "");
     });
 
-    // console.error / console.warn — keep originals, also record.
+    // console.error / console.warn - keep originals, also record.
     ["error", "warn"].forEach(level => {
       const orig = console[level] ? console[level].bind(console) : function () {};
       console[level] = function (...args) {
@@ -106,11 +106,11 @@
 
     // NB: toast() is called by bare name in app.js (a hoisted function
     // declaration), so reassigning window.toast would NOT intercept those calls.
-    // We deliberately rely on the reliable sinks instead — console.error/warn,
-    // the window error handlers, and failed fetch()es — which DO capture the
+    // We deliberately rely on the reliable sinks instead - console.error/warn,
+    // the window error handlers, and failed fetch()es - which DO capture the
     // app's real failures (its global trap + catch blocks all console.error).
 
-    // fetch() — record non-OK API responses with the URL + status.
+    // fetch() - record non-OK API responses with the URL + status.
     if (window.fetch) {
       const origFetch = window.fetch.bind(window);
       window.fetch = async function (input, init) {
@@ -118,13 +118,13 @@
         try {
           const res = await origFetch(input, init);
           if (!res.ok && /\/api\//.test(url)) {
-            record("error", `HTTP ${res.status} · ${shortUrl(url)}`,
+            record("error", `HTTP ${res.status} / ${shortUrl(url)}`,
                    `${(init && init.method) || "GET"} ${url}`);
           }
           return res;
         } catch (e) {
-          if (/\/api\//.test(url)) record("error", `Network error · ${shortUrl(url)}`, String(e));
-          throw e;   // never swallow — callers handle it as before
+          if (/\/api\//.test(url)) record("error", `Network error / ${shortUrl(url)}`, String(e));
+          throw e;   // never swallow; callers handle it as before
         }
       };
     }
@@ -133,7 +133,7 @@
   function shortUrl(u) { try { return new URL(u, location.href).pathname; } catch { return u; } }
   function safeJson(o) { try { return JSON.stringify(o); } catch { return String(o); } }
 
-  // ── UI: modal viewer + badge ─────────────────────────────────────────────
+  // UI: modal viewer + badge
   const UI = {
     root: null,
     open: false,
@@ -148,15 +148,15 @@
         <div class="errlog-backdrop"></div>
         <div class="errlog-panel">
           <div class="errlog-head">
-            <div class="errlog-title">⚑ Error log <span class="errlog-count" id="errlogCount"></span></div>
+            <div class="errlog-title">Error log <span class="errlog-count" id="errlogCount"></span></div>
             <div class="errlog-actions">
-              <button class="errlog-btn" id="errlogCopy" title="Copy all entries">⧉ Copy</button>
-              <button class="errlog-btn" id="errlogClear" title="Clear the log">🗑 Clear</button>
-              <button class="errlog-btn errlog-x" id="errlogClose" aria-label="Close">✕</button>
+              <button class="errlog-btn" id="errlogCopy" title="Copy all entries">Copy</button>
+              <button class="errlog-btn" id="errlogClear" title="Clear the log">Clear</button>
+              <button class="errlog-btn errlog-x" id="errlogClose" aria-label="Close">X</button>
             </div>
           </div>
           <div class="errlog-list" id="errlogList"></div>
-          <div class="errlog-foot">Local only · last ${MAX} events · <kbd>E</kbd> opens this</div>
+          <div class="errlog-foot">Local only / last ${MAX} events / <kbd>E</kbd> opens this</div>
         </div>`;
       document.body.appendChild(root);
       this.root = root;
@@ -173,7 +173,7 @@
       const items = Store.items.slice().reverse();
       $("errlogCount").textContent = items.length ? `${items.length}` : "";
       if (!items.length) {
-        list.innerHTML = `<div class="errlog-empty">✓ No errors logged. Nice.</div>`;
+        list.innerHTML = `<div class="errlog-empty">No errors logged.</div>`;
         return;
       }
       list.innerHTML = items.map(e => {
@@ -181,7 +181,7 @@
         const time = t.toLocaleTimeString();
         const date = t.toLocaleDateString();
         const cls = e.type === "warn" ? "warn" : "error";
-        const mult = e.count && e.count > 1 ? ` <span class="errlog-mult">×${e.count}</span>` : "";
+        const mult = e.count && e.count > 1 ? ` <span class="errlog-mult">x${e.count}</span>` : "";
         const detail = e.detail
           ? `<pre class="errlog-detail">${esc(e.detail)}</pre>` : "";
         return `
@@ -190,7 +190,7 @@
               <span class="errlog-tag errlog-tag-${cls}">${cls.toUpperCase()}</span>
               <span class="errlog-msg">${esc(e.msg)}${mult}</span>
             </div>
-            <div class="errlog-meta">${esc(time)} · ${esc(date)} · <span class="errlog-where">${esc(e.where)}</span></div>
+            <div class="errlog-meta">${esc(time)} / ${esc(date)} / <span class="errlog-where">${esc(e.where)}</span></div>
             ${detail}
           </div>`;
       }).join("");

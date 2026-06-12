@@ -1,6 +1,6 @@
-/* ═══════════════════════════════════════════════════════════════════
-   OCTOVOX — Frontend App
-═══════════════════════════════════════════════════════════════════ */
+/* ------------------------------------------------------------------
+   OCTOVOX - Frontend App
+------------------------------------------------------------------ */
 
 const $ = id => document.getElementById(id);
 const qs = sel => document.querySelector(sel);
@@ -34,11 +34,11 @@ const state = {
 };
 
 
-/* ═══════════════════ BUSY CONTROLLER ═══════════════════
+/* BUSY CONTROLLER
  * Enforces "one operation at a time" across the whole app.
  * Acquire returns false if something is already running (and toasts
  * a friendly explanation). Release is idempotent and ALWAYS safe to
- * call — call it in a finally{} block for any operation that acquires.
+ * call - call it in a finally{} block for any operation that acquires.
  * Includes a 5-minute auto-release watchdog so a stuck operation can
  * never permanently lock the UI.
  */
@@ -50,7 +50,7 @@ const Busy = {
 
   acquire(what) {
     if (this.active) {
-      toast(`⏳ Wait — ${this.what} is still running. Try again when it finishes.`, "warn");
+      toast(`Wait - ${this.what} is still running. Try again when it finishes.`, "warn");
       return false;
     }
     this.active = true;
@@ -62,7 +62,7 @@ const Busy = {
     this._watchdog = setTimeout(() => {
       if (this.active) {
         console.warn("[Busy] watchdog auto-release after 5 min:", this.what);
-        toast(`⚠ Operation "${this.what}" took too long — UI unlocked. Check the server terminal for errors.`, "warn");
+        toast(`Operation "${this.what}" took too long - UI unlocked. Check the server terminal for errors.`, "warn");
         this.release();
         try { hideProgress(); } catch {}
       }
@@ -82,21 +82,21 @@ const Busy = {
 };
 
 
-/* ═══════════════════ GLOBAL ERROR TRAP ═══════════════════
+/* GLOBAL ERROR TRAP
  * Any uncaught JS error or unhandled promise rejection is surfaced
  * to the user as a toast AND force-releases Busy + hides progress so
  * the UI never gets stuck in a half-broken state.
  */
 window.addEventListener("error", e => {
   console.error("[OCTOVOX] uncaught error:", e.error || e.message);
-  toast(`⚠ Unexpected error: ${e.message || "unknown"}. UI reset.`, "error");
+  toast(`Unexpected error: ${e.message || "unknown"}. UI reset.`, "error");
   Busy.release();
   try { hideProgress(); } catch {}
 });
 window.addEventListener("unhandledrejection", e => {
   console.error("[OCTOVOX] unhandled rejection:", e.reason);
   const msg = (e.reason && e.reason.message) || String(e.reason || "unknown");
-  toast(`⚠ Background task failed: ${msg}. UI reset.`, "error");
+  toast(`Background task failed: ${msg}. UI reset.`, "error");
   Busy.release();
   try { hideProgress(); } catch {}
 });
@@ -119,17 +119,17 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 
-/* ═══════════════════ HERO TYPEWRITER ═══════════════════ */
+/* HERO TYPEWRITER */
 function setupHeroTypewriter() {
   const el = $("heroTagText");
   if (!el) return;
   const MSGS = [
-    `An <b style="color:var(--teal)">11-stage production pipeline</b> turns 8 raw mic channels into one clean voice — in a fraction of real-time.`,
-    `Channel calibration → high-pass → VAD → DOA → <b style="color:var(--teal)">MVDR beamforming</b> → AEC → noise reduction → automix → AGC / EQ / limiter.`,
-    `<b style="color:var(--violet)">DeepFilterNet3</b> does the denoising — natural-sounding voice with no robotic, musical-noise artifacts.`,
-    `Built for the <b style="color:var(--teal)">sensiBel SB-POLARIS</b> 8-mic optical MEMS array — 48 kHz, 24-bit.`,
+    `An <b style="color:var(--teal)">11-stage production pipeline</b> turns 8 raw mic channels into one clean voice - in a fraction of real-time.`,
+    `Channel calibration -> high-pass -> VAD -> DOA -> <b style="color:var(--teal)">MVDR beamforming</b> -> AEC -> noise reduction -> automix -> AGC / EQ / limiter.`,
+    `<b style="color:var(--violet)">DeepFilterNet3</b> does the denoising - natural-sounding voice with no robotic, musical-noise artifacts.`,
+    `Built for the <b style="color:var(--teal)">sensiBel SB-POLARIS</b> 8-mic optical MEMS array - 48 kHz, 24-bit.`,
   ];
-  // Type the lead message ONCE, then settle — a constantly-cycling header is
+  // Type the lead message ONCE, then settle - a constantly-cycling header is
   // restless on a console you scan while recording. Honour reduced-motion by
   // showing the final text immediately. (Cycling-forever behaviour removed.)
   const plainOf = (h) => { const d = document.createElement("div"); d.innerHTML = h; return d.textContent || ""; };
@@ -153,7 +153,7 @@ function setupHeroTypewriter() {
 }
 
 
-/* ═══════════════════ THEME-DRIVEN JS COLORS ═══════════════════
+/* THEME-DRIVEN JS COLORS
  * WaveSurfer + the radar canvas can't read CSS, so they pull their colors
  * from the same design tokens via getComputedStyle. shell.js calls
  * refreshThemedJsColors() whenever the theme flips so both recolor live.
@@ -179,7 +179,7 @@ function refreshThemedJsColors() {
 }
 
 
-/* ═══════════════════ TABS ═══════════════════ */
+/* TABS */
 function selectCaptureTab(name) {
   const t = qs(`.tab[data-tab="${name}"]`);
   if (t) t.click();
@@ -197,7 +197,7 @@ function setupTabs() {
   });
 
   // Mobile-first: live multi-channel Record needs the 8-mic array, which a phone
-  // never has — so on narrow screens lead with Sample (CSS reorders the tabs too)
+  // never has - so on narrow screens lead with Sample (CSS reorders the tabs too)
   // unless the user has explicitly chosen a tab this session. Deferred to the
   // next frame so layout/media-queries have settled (robust to load-time width).
   const applyMobileDefault = () => {
@@ -216,7 +216,7 @@ function setupTabs() {
 }
 
 
-/* ═══════════════════ RECORD PANEL ═══════════════════ */
+/* RECORD PANEL */
 async function loadDevices() {
   const sel = $("deviceSelect");
   try {
@@ -225,7 +225,7 @@ async function loadDevices() {
     if (!j.ok) {
       sel.innerHTML = `<option value="">${esc(j.error || "Recording unavailable")}</option>`;
       $("deviceWarn").classList.add("show");
-      $("deviceWarn").innerHTML = `⚠ ${esc(j.error || "Cannot enumerate input devices")}`;
+      $("deviceWarn").innerHTML = esc(j.error || "Cannot enumerate input devices");
       return;
     }
     if (!j.devices.length) {
@@ -235,10 +235,10 @@ async function loadDevices() {
     // Sort: Polaris-like (8+ channels) first
     j.devices.sort((a, b) => (b.is_polaris_like - a.is_polaris_like));
     sel.innerHTML = j.devices.map(d => {
-      const ok = d.is_polaris_like ? '✓' : '⚠';
+      const ok = d.is_polaris_like ? 'OK' : 'WARN';
       const tag = d.is_polaris_like ? 'Polaris-compatible' : 'only ' + d.max_input_ch + ' ch';
       return `<option value="${d.index}" data-ch="${d.max_input_ch}" data-sr="${d.default_sr}">
-        ${ok} #${d.index} · ${esc(d.name)} — ${tag}
+        ${ok} #${d.index} / ${esc(d.name)} - ${tag}
       </option>`;
     }).join("");
     // Pick first Polaris-compatible automatically
@@ -248,7 +248,7 @@ async function loadDevices() {
   } catch (err) {
     sel.innerHTML = `<option value="">Could not load devices</option>`;
     $("deviceWarn").classList.add("show");
-    $("deviceWarn").innerHTML = `⚠ ${esc(err.message)}`;
+    $("deviceWarn").innerHTML = esc(err.message);
   }
 }
 
@@ -260,7 +260,7 @@ function validateSelectedDevice() {
   const ch = parseInt(opt.dataset.ch);
   if (ch < REQUIRED_CH) {
     warn.classList.add("show");
-    warn.innerHTML = `⚠ <b>This device exposes only ${ch} channels.</b> OCTOVOX needs all ${REQUIRED_CH} channels of your sensiBel SB-POLARIS array. Select a device that exposes 8 inputs.`;
+    warn.innerHTML = `<b>This device exposes only ${ch} channels.</b> OCTOVOX needs all ${REQUIRED_CH} channels of your sensiBel SB-POLARIS array. Select a device that exposes 8 inputs.`;
   } else {
     warn.classList.remove("show");
   }
@@ -284,7 +284,7 @@ async function runPreflight() {
   const device = $("deviceSelect").value;
   const btn = $("preflightBtn");
   btn.disabled = true;
-  btn.textContent = "Testing…";
+  btn.textContent = "Testing...";
   $("levelsBlock").classList.remove("hidden");
   try {
     const r = await fetch("/api/preflight", {
@@ -299,12 +299,12 @@ async function runPreflight() {
       return;
     }
     renderLevels(j.per_ch_peak_db, j.per_ch_rms_db, j.warnings || []);
-    toast("Preflight done — check channel levels");
+    toast("Preflight done - check channel levels");
   } catch (err) {
     toast("Preflight error: " + err.message, "error");
   } finally {
     btn.disabled = false;
-    btn.textContent = "⚙ Test mics (0.3 s)";
+    btn.textContent = "Test mics (0.3 s)";
   }
 }
 
@@ -328,7 +328,7 @@ function renderLevels(peakDb, rmsDb, warnings) {
       <div class="level-bar-val">${p.toFixed(0)} dB</div>
     </div>`;
   }).join("");
-  warnBox.innerHTML = (warnings || []).map(w => `<div class="warn-line">⚠ ${esc(w)}</div>`).join("");
+  warnBox.innerHTML = (warnings || []).map(w => `<div class="warn-line">${esc(w)}</div>`).join("");
 }
 
 async function runRecord() {
@@ -342,11 +342,11 @@ async function runRecord() {
   const btn = $("recordBtn");
   const btnText = $("recordBtnText");
   btn.classList.add("recording");
-  btnText.textContent = `● REC · ${seconds}s`;
+  btnText.textContent = `REC / ${seconds}s`;
   let remaining = seconds;
   const tick = setInterval(() => {
     remaining--;
-    btnText.textContent = `● REC · ${remaining}s remaining`;
+    btnText.textContent = `REC / ${remaining}s remaining`;
   }, 1000);
   let didProcess = false;
   try {
@@ -373,18 +373,18 @@ async function runRecord() {
       toast(
         `Recording is silent (peak ${peakDbfs.toFixed(0)} dBFS). The file was saved as "${j.name}" but won't be analysed.\n\n` +
         `Likely causes:\n` +
-        `• sensiBel kit not powered or not connected\n` +
-        `• Wrong input device selected (your sensiBel shows as "Digital Audio Interface (SB-POL...)")\n` +
-        `• Windows input level muted or at 0 in Sound settings\n` +
-        `• OS-level mic privacy blocking access`,
+        `- sensiBel kit not powered or not connected\n` +
+        `- Wrong input device selected (your sensiBel shows as "Digital Audio Interface (SB-POL...)")\n` +
+        `- Windows input level muted or at 0 in Sound settings\n` +
+        `- OS-level mic privacy blocking access`,
         "error");
       refreshFiles();
       return;
     }
-    btnText.textContent = `Saved (peak ${peakDbfs.toFixed(0)} dBFS) · analysing…`;
-    toast(`Recorded ${j.name} · peak ${peakDbfs.toFixed(0)} dBFS, gain +${(j.gain_applied_db||0).toFixed(0)} dB applied`);
+    btnText.textContent = `Saved (peak ${peakDbfs.toFixed(0)} dBFS) / analysing...`;
+    toast(`Recorded ${j.name} / peak ${peakDbfs.toFixed(0)} dBFS, gain +${(j.gain_applied_db||0).toFixed(0)} dB applied`);
     refreshFiles();
-    // Hand off to processFile — release lock first so processFile can re-acquire
+    // Hand off to processFile - release lock first so processFile can re-acquire
     didProcess = true;
     state.recording = false;
     btn.classList.remove("recording");
@@ -406,7 +406,7 @@ async function runRecord() {
 }
 
 
-/* ═══════════════════ DROP ZONE ═══════════════════ */
+/* DROP ZONE */
 function setupDropzone() {
   const dz = $("dz");
   const fi = $("fileInput");
@@ -441,12 +441,12 @@ async function handleFile(file) {
     return;
   }
 
-  // Acquire the global lock — refuse if anything else is running.
+  // Acquire the global lock - refuse if anything else is running.
   if (!Busy.acquire(`uploading ${file.name}`)) return;
 
   // Inner uploader so we can reuse it for "Replace" and "Save with new name"
   const doUpload = async (uploadFile, opts = {}) => {
-    showProgress(`Uploading ${uploadFile.name}…`);
+    showProgress(`Uploading ${uploadFile.name}...`);
     const fd = new FormData();
     fd.append("file", uploadFile, uploadFile.name);
     if (opts.overwrite) fd.append("overwrite", "1");
@@ -461,13 +461,13 @@ async function handleFile(file) {
   try {
     let j = await doUpload(file);
 
-    // ── Duplicate handling — friendly modal with 3 choices ──────
+    // Duplicate handling - friendly modal with 3 choices.
     if (!j.ok && j.duplicate) {
       hideProgress();
       const sizeMb = (j.existing_size_kb / 1024).toFixed(1);
       const dur    = (j.existing_duration || 0).toFixed(1);
       const choice = await showModal({
-        icon: "📁",
+        icon: "FILE",
         iconType: "warn",
         title: "A file with this name already exists",
         body: `
@@ -478,7 +478,7 @@ async function handleFile(file) {
             <div class="mi-row"><span>Existing duration</span><b>${dur} s</b></div>
           </div>
           <p style="font-size:12px;color:var(--muted);">
-             💡 Tip — saving as <code>${esc(j.suggested_name)}</code> keeps both files so you can compare results.
+             Tip - saving as <code>${esc(j.suggested_name)}</code> keeps both files so you can compare results.
           </p>`,
         buttons: [
           { id: "cancel",  label: "Keep existing",      variant: "ghost"   },
@@ -488,7 +488,7 @@ async function handleFile(file) {
       });
 
       if (choice === "cancel") {
-        // Helpful "kept existing" flow — release lock first, then guide
+        // Helpful "kept existing" flow - release lock first, then guide
         triggerProcess = false;
         Busy.release();           // release BEFORE refreshing so file row is interactive
         await refreshFiles();     // wait for the row to actually exist
@@ -499,10 +499,10 @@ async function handleFile(file) {
           setTimeout(() => row.classList.remove("flash-highlight"), 2400);
           const hasResult = row.classList.contains("has-result");
           toast(hasResult
-            ? `✓ Kept ${j.name}. Click ◉ to view its existing results.`
-            : `✓ Kept ${j.name}. Click ▶ to analyse it.`);
+            ? `Kept ${j.name}. Click View to open its existing results.`
+            : `Kept ${j.name}. Click Run to analyse it.`);
         } else {
-          toast(`✓ Kept ${j.name} — your original file is safe.`);
+          toast(`Kept ${j.name} - your original file is safe.`);
         }
         return;
       }
@@ -514,12 +514,12 @@ async function handleFile(file) {
       }
     }
 
-    // ── Spec mismatch or other backend rejection ────────────────
+    // Spec mismatch or other backend rejection.
     if (!j.ok) {
       triggerProcess = false;
       hideProgress();
       if (j.problems && j.problems.length) {
-        const details = j.problems.map(p => `• ${p}`).join("\n");
+        const details = j.problems.map(p => `- ${p}`).join("\n");
         toast(`File rejected (doesn't match sensiBel spec):\n${details}`, "error");
       } else {
         toast(`Upload failed: ${j.error || "unknown error"}`, "error");
@@ -527,15 +527,15 @@ async function handleFile(file) {
       return;
     }
 
-    // ── Success: surface warnings, refresh files, then analyse ──
+    // Success: surface warnings, refresh files, then analyse.
     const fname = j.name;
     if ((j.warnings || []).length) {
-      j.warnings.forEach(w => toast(`⚠ ${w}`, "warn"));
+      j.warnings.forEach(w => toast(w, "warn"));
     }
-    toast(j.replaced ? `Replaced ${fname} ✓` : `Uploaded ${fname} ✓`);
+    toast(j.replaced ? `Replaced ${fname}` : `Uploaded ${fname}`);
     refreshFiles();
 
-    // Hand off the busy state to processFile — it will release on its own.
+    // Hand off the busy state to processFile - it will release on its own.
     triggerProcess = false;
     Busy.release();
     await processFile(fname);
@@ -559,7 +559,7 @@ function cssEscape(s) {
 }
 
 
-/* ═══════════════════ SAMPLE PANEL ═══════════════════ */
+/* SAMPLE PANEL */
 function setupSamplePanel() {
   const snr = $("sampleSnr"), snrLab = $("sampleSnrVal");
   const dur = $("sampleDur"), durLab = $("sampleDurVal");
@@ -572,7 +572,7 @@ function setupSamplePanel() {
     if (!Busy.acquire("generating sample")) return;
     let handedOff = false;
     try {
-      showProgress("Generating synthetic 8-channel sample…");
+      showProgress("Generating synthetic 8-channel sample...");
       const r = await fetch("/api/sample", {
         method: "POST", headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ duration_s: parseInt(dur.value), snr_db: parseInt(snr.value) }),
@@ -581,7 +581,7 @@ function setupSamplePanel() {
       const j = await r.json();
       const fname = j.filename || j.name;
       if (fname) {
-        toast(`Sample generated: ${fname} · analysing…`);
+        toast(`Sample generated: ${fname} / analysing...`);
         handedOff = true;
         Busy.release();           // release first so processFile can re-acquire
         await processFile(fname);
@@ -600,18 +600,18 @@ function setupSamplePanel() {
 }
 
 
-/* ═══════════════════ PROCESS STREAM ═══════════════════ */
+/* PROCESS STREAM */
 /**
  * Per-file primary action. The app's running pipeline is now the production
- * voice chain (POST /api/clean → prod_pipeline.run_production), so "analyse"
+ * voice chain (POST /api/clean -> prod_pipeline.run_production), so "analyse"
  * cleans the voice and shows the stages + timing. Kept named ``processFile``
- * because every caller (row ▶, Run-all, post-upload auto-run) invokes it.
+ * because every caller (row Run, Run-all, post-upload auto-run) invokes it.
  */
 async function processFile(filename) {
   return runProduction(filename);
 }
 
-/** Undo a soft-delete — restore the trashed file (and its results) and refresh. */
+/** Undo a soft-delete - restore the trashed file (and its results) and refresh. */
 async function restoreDeleted(token, fname) {
   try {
     const r = await fetch("/api/restore", {
@@ -620,7 +620,7 @@ async function restoreDeleted(token, fname) {
     });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    toast(`Restored ${j.restored || fname} ✓`);
+    toast(`Restored ${j.restored || fname}`);
     refreshFiles();
     loadVerdict();
   } catch (err) {
@@ -641,17 +641,17 @@ function showProgress(msg) {
   const sp = $("stickyProgress");
   if (sp) {
     $("spTitle").textContent = msg;
-    $("spSub").textContent = "starting…";
+    $("spSub").textContent = "starting...";
     $("spPct").textContent = "0%";
     $("spFill").style.width = "0%";
     sp.classList.remove("hidden");
-    // Click → scroll to full progress panel
+    // Click to scroll to full progress panel
     sp.onclick = () => $("progressBlock").scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }
 
 function updateProgress(msg, pct, explicitStage) {
-  $("progressTitle").textContent = msg || "Working…";
+  $("progressTitle").textContent = msg || "Working...";
   if (pct != null && pct >= 0) {
     const p = Math.max(0, Math.min(100, pct));
     $("progressPct").textContent = `${Math.round(p)}%`;
@@ -660,8 +660,8 @@ function updateProgress(msg, pct, explicitStage) {
     $("spPct") && ($("spPct").textContent = `${Math.round(p)}%`);
     $("spFill") && ($("spFill").style.width = `${p}%`);
   }
-  // Sticky sub-line — the in-flight stage message (different from title)
-  $("spSub") && ($("spSub").textContent = msg || "working…");
+  // Sticky sub-line - the in-flight stage message (different from title)
+  $("spSub") && ($("spSub").textContent = msg || "working...");
   // Prefer the server-supplied stage id (reliable); fall back to keyword match
   // for the legacy streaming path that doesn't send one.
   let activeStage = explicitStage || null;
@@ -698,19 +698,19 @@ function hideProgress() {
 }
 
 
-/* ═══════════════════ FILES PANEL ═══════════════════ */
+/* FILES PANEL */
 function setupFilesPanel() {
   $("refreshFiles").addEventListener("click", refreshFiles);
   $("runAllBtn").addEventListener("click", runAllFiles);
   $("clearOutputBtn").addEventListener("click", clearAllOutput);
 
-  // ── Restore persisted sort preference (density was removed) ─────
+  // Restore persisted sort preference.
   try {
     state.fileSortMode = localStorage.getItem("octovox.fileSort") || "newest";
     state.fileFilterQ  = "";  // search is always empty on fresh load
   } catch { /* localStorage may be blocked in private mode */ }
 
-  // ── Sort dropdown ────────────────────────────────────────────
+  // Sort dropdown.
   const sortSel = $("filesSort");
   if (sortSel) {
     sortSel.value = state.fileSortMode || "newest";
@@ -721,7 +721,7 @@ function setupFilesPanel() {
     });
   }
 
-  // ── Filter input (live, debounced) ────────────────────────────
+  // Filter input (live, debounced).
   const filt    = $("filesFilter");
   const clearBt = $("filesFilterClear");
   let debounceT = null;
@@ -806,7 +806,7 @@ function renderFilesList(files, wMap) {
     if (hasResult) statusCls = isNMW ? "status-gold" : "status-analysed";
 
     const winnerHtml = hasResult
-      ? `<div class="file-winner-pill" title="Bootstrap winner: ${esc(winner.winner)} (${winner.confidence.toFixed(0)}%)">★ ${esc(winner.winner)}</div>`
+      ? `<div class="file-winner-pill" title="Bootstrap winner: ${esc(winner.winner)} (${winner.confidence.toFixed(0)}%)">${esc(winner.winner)}</div>`
       : `<div class="file-winner-pill file-winner-pill-empty">not analysed</div>`;
 
     return `
@@ -815,9 +815,9 @@ function renderFilesList(files, wMap) {
         <div class="file-icon">WAV</div>
         <div class="file-name" contenteditable="false" data-stem="${esc(stem)}">${esc(f.name)}</div>
         ${winnerHtml}
-        <button class="file-btn file-btn-go" title="${hasResult ? 'View results' : 'Analyse'}" data-action="analyse">${hasResult ? '◉' : '▶'}</button>
-        <button class="file-btn" title="Rename" data-action="rename">✎</button>
-        <button class="file-btn file-btn-del" title="Delete" data-action="delete">✕</button>
+        <button class="file-btn file-btn-go" title="${hasResult ? 'View results' : 'Analyse'}" data-action="analyse">${hasResult ? 'View' : 'Run'}</button>
+        <button class="file-btn" title="Rename" data-action="rename">Edit</button>
+        <button class="file-btn file-btn-del" title="Delete" data-action="delete">Del</button>
       </div>`;
   }).join("");
 
@@ -833,7 +833,7 @@ function renderFilesList(files, wMap) {
       if (state.filesWMap[stem]) { await showResults(stem); return; }
       btn.setAttribute("data-state", "running");
       const origText = btn.textContent;
-      btn.textContent = "⟳";
+      btn.textContent = "...";
       try {
         await processFile(fname);
       } finally {
@@ -887,7 +887,7 @@ function renderFilesList(files, wMap) {
     row.querySelector('[data-action="delete"]').addEventListener("click", async e => {
       e.stopPropagation();
       const choice = await showModal({
-        icon: "🗑",
+        icon: "DEL",
         iconType: "danger",
         title: "Delete this recording?",
         body: `
@@ -923,14 +923,14 @@ function renderFilesList(files, wMap) {
           }
           refreshFiles();
           loadVerdict();
-          // Offer an Undo — the file is in the trash, not gone, so this restores it.
+          // Offer an Undo - the file is in the trash, not gone, so this restores it.
           if (j.restore_token) {
             toast(`Deleted ${fname}`, "ok", {
               duration: 8000,
               action: { label: "Undo", onClick: () => restoreDeleted(j.restore_token, fname) },
             });
           } else {
-            toast(`Deleted ${fname} ✓`);
+            toast(`Deleted ${fname}`);
           }
         } else {
           toast("Delete failed: " + (j.error || "?"), "error");
@@ -966,16 +966,16 @@ function applyFileSortFilter(files, wMap) {
 
 
 
-/* ═══════════════════ BATCH: RUN ALL ═══════════════════
+/* BATCH: RUN ALL
  * Analyse every input file that hasn't been processed yet, one after
  * another. The pipeline is single-threaded (Busy enforces one op at a
- * time), so we drive processFile() sequentially — each call acquires and
+ * time), so we drive processFile() sequentially - each call acquires and
  * releases the global lock on its own. Already-analysed files are skipped.
  */
 async function runAllFiles() {
   if (state.runningAll) return;
   if (Busy.isBusy()) {
-    toast(`⏳ Wait — ${Busy.what} is still running. Try Run all when it finishes.`, "warn");
+    toast(`Wait - ${Busy.what} is still running. Try Run all when it finishes.`, "warn");
     return;
   }
 
@@ -983,13 +983,13 @@ async function runAllFiles() {
   await refreshFiles();
   const all = (state.filesAll || []).slice();
   if (!all.length) {
-    toast("No files to analyse — record, upload, or generate a sample first.", "warn");
+    toast("No files to analyse - record, upload, or generate a sample first.", "warn");
     return;
   }
   const wMap = state.filesWMap || {};
   const pending = all.filter(f => !wMap[f.name.replace(/\.wav$/i, "")]);
   if (!pending.length) {
-    toast("All files are already analysed ✓ — use Clear output first to re-run them.");
+    toast("All files are already analysed - use Clear output first to re-run them.");
     return;
   }
 
@@ -1010,14 +1010,14 @@ async function runAllFiles() {
   try {
     for (let i = 0; i < pending.length; i++) {
       const f = pending[i];
-      btn.textContent = `Running ${i + 1}/${pending.length}…`;
-      toast(`▶ Analysing ${f.name} (${i + 1}/${pending.length})`);
+      btn.textContent = `Running ${i + 1}/${pending.length}...`;
+      toast(`Analysing ${f.name} (${i + 1}/${pending.length})`);
       const success = await processFile(f.name);
       if (success) ok++; else fail++;
     }
     toast(fail
-      ? `Run all finished — ${ok} analysed, ${fail} failed. Check the server terminal.`
-      : `Run all finished — analysed ${ok} file${ok === 1 ? "" : "s"} ✓`,
+      ? `Run all finished - ${ok} analysed, ${fail} failed. Check the server terminal.`
+      : `Run all finished - analysed ${ok} file${ok === 1 ? "" : "s"}`,
       fail ? "warn" : undefined);
   } finally {
     state.runningAll = false;
@@ -1029,27 +1029,27 @@ async function runAllFiles() {
 }
 
 
-/* ═══════════════════ BATCH: CLEAR OUTPUT ═══════════════════
+/* BATCH: CLEAR OUTPUT
  * Wipe every previous analysis result (/output/<stem> folders). Input
  * .wav files are kept. Confirms first, then resets the open results view
  * and the verdict.
  */
 async function clearAllOutput() {
   if (state.runningAll) {
-    toast("⏳ Wait — Run all is still in progress.", "warn");
+    toast("Wait - Run all is still in progress.", "warn");
     return;
   }
   if (Busy.isBusy()) {
-    toast(`⏳ Wait — ${Busy.what} is still running.`, "warn");
+    toast(`Wait - ${Busy.what} is still running.`, "warn");
     return;
   }
 
   const choice = await showModal({
-    icon: "🗑",
+    icon: "DEL",
     iconType: "danger",
     title: "Clear all previous output?",
     body: `
-      <p>This permanently removes <b>every analysis result</b> — winner audio,
+      <p>This permanently removes <b>every analysis result</b> - winner audio,
          visualizations, reports and metrics for all recordings.</p>
       <div class="modal-info">
         <div class="mi-row"><span>Your input .wav files</span><b>will be kept</b></div>
@@ -1079,7 +1079,7 @@ async function clearAllOutput() {
       if (window.Shell.router.current === "studio") window.Shell.router.navigate("library");
     }
 
-    toast(`Cleared ${j.removed} result${j.removed === 1 ? "" : "s"} ✓`);
+    toast(`Cleared ${j.removed} result${j.removed === 1 ? "" : "s"}`);
     refreshFiles();
     loadVerdict();
   } catch (err) {
@@ -1088,15 +1088,14 @@ async function clearAllOutput() {
 }
 
 
-/* ═══════════════════ RESULTS (production) ═══════════════════ */
+/* RESULTS (production) */
 
 
-/* ── Speaker detection ────────────────────────────────────────────────────── */
+/* Speaker detection */
 
 /** Smallest absolute angular separation (degrees) between two azimuths, correct
- *  across the ±180° wrap. JS `%` can return negatives, so normalise to [0,360)
- *  before folding to [-180,180) — otherwise boundary pairs (e.g. -180 vs 175,
- *  which the UCA's front/back ambiguity produces) read as ~355° instead of 5°. */
+ *  across the +/-180deg wrap. JS `%` can return negatives, so normalise to [0,360)
+ *  before folding to [-180,180) - otherwise boundary pairs read as ~355deg instead of 5deg. */
 function azSep(a, b) {
   const d = (((a - b + 180) % 360) + 360) % 360 - 180;
   return Math.abs(d);
@@ -1106,7 +1105,7 @@ function azSep(a, b) {
 async function detectSpeakers(filename) {
   if (!filename) { toast("Select or clean a file first, then detect speakers.", "warn"); return; }
   const btn = $("detectSpeakersBtn");
-  if (btn) { btn.disabled = true; btn.textContent = "⌛…"; }
+  if (btn) { btn.disabled = true; btn.textContent = "..."; }
   try {
     const r = await fetch("/api/speakers", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1119,13 +1118,13 @@ async function detectSpeakers(filename) {
     renderSpeakerChips(state.detectedSpeakers);   // also redraws the radar
     const n = state.detectedSpeakers.length;
     toast(n > 0
-      ? `Found ${n} talker direction${n > 1 ? "s" : ""} — pick one below to extract it.`
+      ? `Found ${n} talker direction${n > 1 ? "s" : ""} - pick one below to extract it.`
       : "No distinct speaker directions found (may be single-speaker or reverberant).",
       n > 0 ? "ok" : "warn");
   } catch (err) {
     toast(`Speaker detect failed: ${err.message}`, "error");
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "⊕ Detect"; }
+    if (btn) { btn.disabled = false; btn.textContent = "Detect"; }
   }
 }
 
@@ -1137,7 +1136,7 @@ function renderSpeakerChips(speakers) {
   if (!wrap) return;
   wrap.innerHTML = "";
   if (!speakers || speakers.length === 0) {
-    wrap.innerHTML = '<span class="speaker-empty">⊕ Detect to list talkers, or click the radar to aim.</span>';
+    wrap.innerHTML = '<span class="speaker-empty">Detect to list talkers, or click the radar to aim.</span>';
   } else {
     speakers.forEach(sp => {
       const az = Math.round(sp.az);
@@ -1147,9 +1146,9 @@ function renderSpeakerChips(speakers) {
       const chip = document.createElement("button");
       chip.className = "speaker-chip" + (isActive ? " active" : "");
       chip.dataset.az = sp.az;
-      chip.title = `Azimuth ${az > 0 ? "+" : ""}${az}° · strength ${strength}% · activity ${activity}%`;
+      chip.title = `Azimuth ${az > 0 ? "+" : ""}${az} deg / strength ${strength}% / activity ${activity}%`;
       chip.innerHTML =
-        `<span class="sc-dir">${az > 0 ? "+" : ""}${az}°</span>` +
+        `<span class="sc-dir">${az > 0 ? "+" : ""}${az} deg</span>` +
         `<span class="sc-bar"><span class="sc-fill" style="width:${strength}%"></span></span>`;
       chip.addEventListener("click", () => {
         if (isActive) clearSpeakerSelection();
@@ -1172,28 +1171,28 @@ function selectSpeaker(az, speakers) {
     .map(s => s.az)
     .filter(a => azSep(a, az) >= 20);
   renderSpeakerChips(state.detectedSpeakers);
-  const label = `${az > 0 ? "+" : ""}${Math.round(az)}°`;
-  toast(`Will extract speaker at ${label} on next run — click ↻ Re-run or analyse a file.`, "ok");
+  const label = `${az > 0 ? "+" : ""}${Math.round(az)} deg`;
+  toast(`Will extract speaker at ${label} on next run - click Re-run or analyse a file.`, "ok");
 }
 
-/** Aim at an ARBITRARY azimuth (radar click) — not necessarily a detected
- *  talker. Interferers come from any detected directions ≥20° away; if none
+/** Aim at an ARBITRARY azimuth (radar click) - not necessarily a detected
+ *  talker. Interferers come from any detected directions >=20deg away; if none
  *  were detected, the pipeline auto-detects them at run time. */
 function setManualTarget(az) {
-  az = Math.round((((az + 180) % 360 + 360) % 360) - 180);   // → [-180,180)
+  az = Math.round((((az + 180) % 360 + 360) % 360) - 180);
   state.targetAz = az;
   const others = (state.detectedSpeakers || []).map(s => s.az).filter(a => azSep(a, az) >= 20);
   state.interfererAz = others.length ? others : null;
   renderSpeakerChips(state.detectedSpeakers);
-  toast(`Aimed at ${az > 0 ? "+" : ""}${az}° — re-run to extract that direction.`, "ok");
+  toast(`Aimed at ${az > 0 ? "+" : ""}${az} deg - re-run to extract that direction.`, "ok");
 }
 
-/** Remove the speaker filter — next run will process all voices. */
+/** Remove the speaker filter - next run will process all voices. */
 function clearSpeakerSelection() {
   state.targetAz = null;
   state.interfererAz = null;
   renderSpeakerChips(state.detectedSpeakers);
-  toast("Speaker filter cleared — all voices will be processed.", "ok");
+  toast("Speaker filter cleared - all voices will be processed.", "ok");
 }
 
 /** Map a click on the radar canvas to an azimuth in [-180,180), or null if the
@@ -1204,32 +1203,32 @@ function radarClickToAz(canvas, evt) {
   const y = (evt.clientY - rect.top) * (canvas.height / rect.height);
   const dx = x - canvas.width / 2, dy = y - canvas.height / 2;
   if (Math.hypot(dx, dy) < 8) return null;
-  // inverse of drawAzRadar: screen angle = (az - 90)°
+  // inverse of drawAzRadar: screen angle = (az - 90) degrees
   const az = Math.atan2(dy, dx) * 180 / Math.PI + 90;
   return Math.round((((az + 180) % 360 + 360) % 360) - 180);
 }
 
-/** Update the small "target NN°" / "all voices" readout under the radar. */
+/** Update the small "target NN deg" / "all voices" readout under the radar. */
 function updateTargetReadout() {
   const el = $("targetReadout");
   if (!el) return;
   if (state.targetAz == null) {
-    el.textContent = "all voices · ⊕ Detect, or click the radar to aim";
+    el.textContent = "all voices / Detect, or click the radar to aim";
     el.classList.remove("armed");
   } else {
     const a = state.targetAz;
-    el.textContent = `🎯 target ${a > 0 ? "+" : ""}${a}°` +
+    el.textContent = `target ${a > 0 ? "+" : ""}${a} deg` +
       (state.interfererAz && state.interfererAz.length
-        ? ` · nulling ${state.interfererAz.map(v => (v > 0 ? "+" : "") + Math.round(v) + "°").join(", ")}`
+        ? ` / nulling ${state.interfererAz.map(v => (v > 0 ? "+" : "") + Math.round(v) + " deg").join(", ")}`
         : "");
     el.classList.add("armed");
   }
 }
 
-/** Drop the speaker selection + chips when we move to a different file — a
+/** Drop the speaker selection + chips when we move to a different file - a
  *  target azimuth detected on one recording is meaningless for another. */
 function resetSpeakersForFile(filename) {
-  if (state.speakersFile === filename) return;   // same file → keep the picker
+  if (state.speakersFile === filename) return;   // same file: keep the picker
   state.targetAz = null;
   state.interfererAz = null;
   state.detectedSpeakers = [];
@@ -1257,7 +1256,7 @@ function drawAzRadar(speakers, targetAz) {
     ctx.lineTo(cx + R * Math.cos(rad), cy + R * Math.sin(rad));
     ctx.strokeStyle = tc.radarSpoke; ctx.lineWidth = 1; ctx.stroke();
   }
-  // "F" label (front, 0°)
+  // "F" label (front, 0 degrees)
   ctx.fillStyle = tc.radarLabel; ctx.font = "9px JetBrains Mono, monospace";
   ctx.textAlign = "center"; ctx.fillText("F", cx, cy - R - 3);
   // Center dot (mic array)
@@ -1283,7 +1282,7 @@ function drawAzRadar(speakers, targetAz) {
       ctx.strokeStyle = tc.radarHalo; ctx.lineWidth = 2; ctx.stroke();
     }
   });
-  // Manual aim that isn't one of the detected talkers → draw its own marker so
+  // Manual aim that isn't one of the detected talkers: draw its own marker so
   // a radar-click target is always visible.
   if (targetAz != null && !targetMatched) {
     const rad = (targetAz - 90) * Math.PI / 180;
@@ -1303,24 +1302,24 @@ function drawAzRadar(speakers, targetAz) {
 }
 
 
-/* Preset → knob values. "quality" = the full-quality defaults (unchanged
+/* Preset to knob values. "quality" = the full-quality defaults (unchanged
  * output); "fast" = the low-runtime profile (no neural NR, single-beam coherent
  * mask, lighter residual). "custom" leaves whatever the user set. */
 const PROD_PRESETS = {
   // quality: full DFN3 + the never-worse "auto" mask (output unchanged).
   // fast: no neural NR, single-beam coherent mask, and beam="batch" so the
   // movement detectors (rtf_drift + tracking-path conditioning) are skipped
-  // entirely — a documented tradeoff (won't follow a fast-moving talker) for
-  // the lowest runtime (~0.33× real-time here vs ~0.44× for quality).
+  // entirely - a documented tradeoff (won't follow a fast-moving talker) for
+  // the lowest runtime (~0.33x real-time here vs ~0.44x for quality).
   // balanced: DF3-quality spatial path (auto beam + never-worse mask) but the
-  // CPU-fast OM-LSA+VAD denoiser instead of neural DFN3 — close to quality on
+  // CPU-fast OM-LSA+VAD denoiser instead of neural DFN3 - close to quality on
   // non-stationary noise, no torch/DFN cost, runs near the fast path.
   quality:  { nr: "dfn",   beam: "auto",  mask: "auto",     residual: 0.6,  dereverb: "none" },
   balanced: { nr: "omlsa", beam: "auto",  mask: "auto",     residual: 0.55, dereverb: "none" },
   fast:     { nr: "fast",  beam: "batch", mask: "coherent", residual: 0.45, dereverb: "none" },
 };
 
-/** Apply a named preset to the individual control elements (guarded — a missing
+/** Apply a named preset to the individual control elements (guarded - a missing
  *  control is simply skipped). Does nothing for "custom". */
 function applyProdPreset(name) {
   const p = PROD_PRESETS[name];
@@ -1335,7 +1334,7 @@ function applyProdPreset(name) {
 }
 
 /** Wire live readouts + the preset selector for the pipeline control knobs. */
-/* ── Studio settings persistence ───────────────────────────────────────────
+/* Studio settings persistence
  * Remember the user's last knob positions so a returning user doesn't redo the
  * same setup. Reference (file-specific) and Report (per-run intent) are excluded.
  * value-type inputs use .value; checkboxes use .checked. */
@@ -1381,7 +1380,7 @@ function setupProdControls() {
     r.addEventListener("input", show);
     show();
   }
-  // Advanced-knob live readouts (slider value → label).
+  // Advanced-knob live readouts (slider value to label).
   const liveLabel = (id, valId, fmt) => {
     const el = $(id), lab = $(valId);
     if (!el || !lab) return;
@@ -1390,7 +1389,7 @@ function setupProdControls() {
   };
   liveLabel("prodBlend", "prodBlendVal", v => v.toFixed(2));
   liveLabel("prodDfnCap", "prodDfnCapVal", v => `${v} dB`);
-  liveLabel("prodPauseFloor", "prodPauseFloorVal", v => `−${Math.abs(v)} dB`);
+  liveLabel("prodPauseFloor", "prodPauseFloorVal", v => `-${Math.abs(v)} dB`);
 
   // Preset dropdown drives the individual knobs; touching any knob flips the
   // preset back to "custom" so the label never lies about the live settings.
@@ -1414,7 +1413,7 @@ function setupProdControls() {
     if (!el) return;
     el.addEventListener("change", saveProdSettings);
   });
-  // sliders fire 'input' continuously — save on release via 'change' (above),
+  // sliders fire 'input' continuously - save on release via 'change' (above),
   // which range inputs also emit, so no extra listener is needed.
 
   populateReferencePicker();
@@ -1427,7 +1426,7 @@ function setupProdControls() {
   const clearSpBtn = $("clearSpeakerBtn");
   if (clearSpBtn) clearSpBtn.addEventListener("click", () => clearSpeakerSelection());
   // Radar is a click-to-aim control: click any direction to steer the beam there
-  // (snapping to a nearby detected talker if one is within 8°).
+  // (snapping to a nearby detected talker if one is within 8 degrees).
   const radar = $("azRadar");
   if (radar) {
     radar.addEventListener("click", (e) => {
@@ -1477,10 +1476,10 @@ function getProdOpts() {
     eq:    ($("prodEq") ? $("prodEq").checked : true),
     report: ($("prodReport") ? $("prodReport").checked : false),
   };
-  // AEC far-end reference (a no-op without it) — only send when one is chosen.
+  // AEC far-end reference (a no-op without it) - only send when one is chosen.
   const refSel = $("prodReference");
   if (refSel && refSel.value) opts.reference = refSel.value;
-  // Advanced knobs — only override the backend defaults when present.
+  // Advanced knobs - only override the backend defaults when present.
   if ($("prodBlend"))      opts.mvdr_blend = parseFloat($("prodBlend").value);
   if ($("prodDfnCap"))     opts.dfn_atten_lim_db = parseFloat($("prodDfnCap").value);
   if ($("prodPauseFloor")) opts.pause_floor_db = parseFloat($("prodPauseFloor").value);
@@ -1499,17 +1498,17 @@ function getProdOpts() {
 /**
  * Run the production voice pipeline on one file and render the result:
  * raw-vs-clean A/B players + the per-stage ran/skip + timing table. This is
- * the app's running pipeline (POST /api/clean → run_production).
+ * the app's running pipeline (POST /api/clean -> run_production).
  */
 async function runProduction(filename) {
   if (!filename) { toast("runProduction called with no filename.", "error"); return false; }
   if (!Busy.acquire(`cleaning ${filename}`)) return false;
   // A speaker azimuth detected on a different recording must not bleed into this
-  // run — reset the picker unless it belongs to the file we're about to clean.
+  // run - reset the picker unless it belongs to the file we're about to clean.
   resetSpeakersForFile(filename);
   state.selectedFile = filename;
   const opts = getProdOpts();
-  showProgress(`Cleaning voice (${opts.nr})…`);
+  showProgress(`Cleaning voice (${opts.nr})...`);
   try {
     // Stream REAL per-stage progress from the pipeline (NDJSON). Falls back to
     // the synchronous /api/clean if streaming is unavailable mid-flight.
@@ -1521,7 +1520,7 @@ async function runProduction(filename) {
     const skipped = Object.entries(j.stages || {})
       .filter(([, s]) => s && s.ran === false).map(([k]) => k);
     toast(`Clean ready in ${j.elapsed_s}s` +
-          (skipped.length ? ` — skipped: ${skipped.join(", ")}` : " — all stages ran ✓"),
+          (skipped.length ? ` - skipped: ${skipped.join(", ")}` : " - all stages ran"),
           skipped.length ? "warn" : "ok");
     return true;
   } catch (err) {
@@ -1537,7 +1536,7 @@ async function runProduction(filename) {
 /** Run the clean via the streaming endpoint, driving the real stage pills as
  *  the pipeline reports them. Resolves with the final `done` payload (same
  *  shape /api/clean returns). Rejects on a pipeline error event or transport
- *  failure — but if the stream never starts (e.g. proxy buffering), it falls
+ *  failure - but if the stream never starts (e.g. proxy buffering), it falls
  *  back to a single synchronous /api/clean so the clean still completes. */
 async function cleanStreaming(filename, opts) {
   let r;
@@ -1550,7 +1549,7 @@ async function cleanStreaming(filename, opts) {
     return cleanSynchronous(filename, opts);   // network/transport failure
   }
   if (!r.ok || !r.body) {
-    // Endpoint missing or non-streaming — degrade gracefully.
+    // Endpoint missing or non-streaming - degrade gracefully.
     if (r.status === 404) return cleanSynchronous(filename, opts);
     let msg = `HTTP ${r.status}`;
     try { const j = await r.json(); msg = j.error || msg; } catch {}
@@ -1582,12 +1581,12 @@ async function cleanStreaming(filename, opts) {
     }
   }
   if (done && done.ok) return done;
-  // Stream closed without a usable result — fall back rather than fail silently.
+  // Stream closed without a usable result - fall back rather than fail silently.
   if (!gotAnyEvent) return cleanSynchronous(filename, opts);
   throw new Error("clean stream ended without a result");
 }
 
-/** Single-shot clean (legacy path) — used as the streaming fallback. */
+/** Single-shot clean (legacy path) - used as the streaming fallback. */
 async function cleanSynchronous(filename, opts) {
   const r = await fetch("/api/clean", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -1598,7 +1597,7 @@ async function cleanSynchronous(filename, opts) {
   return j;
 }
 
-/** "prod: beamform 8→1 (…)" → "beamform 8→1 (…)" for a tidier progress line. */
+/** Strip the "prod:" prefix for a tidier progress line. */
 function stripProdPrefix(msg) {
   return String(msg || "").replace(/^prod:\s*/i, "");
 }
@@ -1611,7 +1610,7 @@ function renderProduction(j) {
 
   if (window.Shell) window.Shell.router.refreshGate();
   const dur = (j.stages && j.stages.mic_capsules && j.stages.mic_capsules.duration_s) || 0;
-  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · ${dur.toFixed(1)} s · ${(j.sr/1000)} kHz · ${j.n_channels} ch`;
+  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> / ${dur.toFixed(1)} s / ${(j.sr/1000)} kHz / ${j.n_channels} ch`;
 
   // Headline stats
   const ran = Object.values(j.stages || {}).filter(s => s && s.ran).length;
@@ -1619,11 +1618,11 @@ function renderProduction(j) {
   const rtf = dur > 0 ? (j.elapsed_s / dur) : 0;
   $("wsElapsed").textContent  = `${j.elapsed_s}s`;
   $("wsStagesRan").textContent = `${ran}/${total}`;
-  $("wsRtf").textContent = rtf ? `${rtf.toFixed(2)}×` : "—";
+  $("wsRtf").textContent = rtf ? `${rtf.toFixed(2)}x` : "-";
 
   $("downloadWinnerBtn").onclick = () => { window.location.href = j.clean; };
   // Only enable the Report button when a report was actually rendered this run
-  // (it is opt-in now — the "Generate report" checkbox). No path-guessing, else
+  // (it is opt-in now - the "Generate report" checkbox). No path-guessing, else
   // the button would 404 on runs that skipped the matplotlib render.
   setReportButton(j.report || null);
   const rerun = $("rerunProdBtn");
@@ -1636,17 +1635,17 @@ function renderProduction(j) {
   const targeted = bf.method === "extract_direction" && bf.target_az != null;
   if ($("winnerName")) {
     $("winnerName").textContent = targeted
-      ? `Speaker @ ${bf.target_az > 0 ? "+" : ""}${bf.target_az}°` : "Clean voice";
+      ? `Speaker @ ${bf.target_az > 0 ? "+" : ""}${bf.target_az} deg` : "Clean voice";
   }
   if ($("winnerFormula")) $("winnerFormula").textContent = buildChainText(j);
 
   loadABPlayers(j.input, j.clean,
     `raw 8-ch downmix`,
-    `${opthLabel(getProdOpts())} · ${j.elapsed_s}s`);
+    `${opthLabel(getProdOpts())} / ${j.elapsed_s}s`);
   renderProdStages(j.stages || {}, j.timings || {});
   if (window.Shell) window.Shell.router.navigate("studio");
 
-  // Auto-detect talkers so the picker is pre-populated — but not during a batch
+  // Auto-detect talkers so the picker is pre-populated - but not during a batch
   // run, not if a target is already chosen, and not if we already detected this
   // file (re-runs keep the existing list).
   maybeAutoDetect(stem);
@@ -1662,7 +1661,7 @@ function buildChainText(j) {
   if (ran("vad")) parts.push("VAD");
   if (ran("doa")) parts.push("DOA");
   if (bf.method === "extract_direction" && bf.target_az != null)
-    parts.push(`extract @${bf.target_az > 0 ? "+" : ""}${bf.target_az}°`);
+    parts.push(`extract @${bf.target_az > 0 ? "+" : ""}${bf.target_az} deg`);
   else if (ran("beamform")) parts.push(`MVDR (${bf.beam_mode || "auto"})`);
   if (ran("dereverb_spectral")) parts.push("dereverb");
   if (ran("dereverb_wpe")) parts.push("WPE");
@@ -1672,7 +1671,7 @@ function buildChainText(j) {
   if (ran("automix")) parts.push("automix");
   if (ran("agc_eq_limiter")) parts.push("AGC/EQ");
   parts.push("out");
-  return parts.join(" → ");
+  return parts.join(" -> ");
 }
 
 /** Kick off speaker detection after a clean so the picker is ready to use. */
@@ -1685,9 +1684,9 @@ function maybeAutoDetect(stem) {
 }
 
 function opthLabel(o) {
-  const dv = (o.dereverb && o.dereverb !== "none") ? ` · derev:${o.dereverb}` : "";
-  const tgt = (o.target_az != null) ? ` · target ${o.target_az}°` : "";
-  return `NR:${o.nr}${dv} · beam:${o.beam}${o.eq ? " · EQ" : ""}${tgt}`;
+  const dv = (o.dereverb && o.dereverb !== "none") ? ` / derev:${o.dereverb}` : "";
+  const tgt = (o.target_az != null) ? ` / target ${o.target_az} deg` : "";
+  return `NR:${o.nr}${dv} / beam:${o.beam}${o.eq ? " / EQ" : ""}${tgt}`;
 }
 
 /** Point the "Report" button at the standalone HTML report (opens in a new tab),
@@ -1710,7 +1709,7 @@ async function showResults(stem) {
   if (window.Shell) window.Shell.router.refreshGate();
   const clean = `/output/${stem}/clean_prod.wav`;
   state.currentClean = clean;
-  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> · <span class="muted">re-run to refresh stage timings</span>`;
+  $("resultsFile").innerHTML = `<code>${esc(stem)}.wav</code> / <span class="muted">re-run to refresh stage timings</span>`;
   $("downloadWinnerBtn").onclick = () => { window.location.href = clean; };
   setReportButton(`/output/${stem}/report.html`);
   if ($("rerunProdBtn")) $("rerunProdBtn").onclick = () => runProduction(`${stem}.wav`);
@@ -1747,7 +1746,7 @@ function loadABPlayers(inputUrl, cleanUrl, inputSub, cleanSub) {
   if (cleanUrl) state.wsWinner.load(cleanUrl);
 
   qsa(".track-play").forEach(btn => {
-    btn.textContent = "▶";
+    btn.textContent = "Play";
     btn.classList.remove("playing");
     btn.onclick = () => {
       const target = btn.dataset.target;
@@ -1757,10 +1756,10 @@ function loadABPlayers(inputUrl, cleanUrl, inputSub, cleanSub) {
       if (other && other.isPlaying()) {
         other.pause();
         const ob = qs(`.track-play[data-target="${target === 'waveInput' ? 'waveWinner' : 'waveInput'}"]`);
-        ob.textContent = "▶"; ob.classList.remove("playing");
+        ob.textContent = "Play"; ob.classList.remove("playing");
       }
       ws.playPause();
-      btn.textContent = ws.isPlaying() ? "❚❚" : "▶";
+      btn.textContent = ws.isPlaying() ? "Pause" : "Play";
       btn.classList.toggle("playing", ws.isPlaying());
     };
   });
@@ -1769,19 +1768,19 @@ function loadABPlayers(inputUrl, cleanUrl, inputSub, cleanSub) {
     ws.on("finish", () => {
       const target = idx === 0 ? "waveInput" : "waveWinner";
       const btn = qs(`.track-play[data-target="${target}"]`);
-      if (btn) { btn.textContent = "▶"; btn.classList.remove("playing"); }
+      if (btn) { btn.textContent = "Play"; btn.classList.remove("playing"); }
     });
   });
 
   setupABCompare();
 }
 
-/* ── Level-matched A/B comparison ───────────────────────────────────────────
+/* Level-matched A/B comparison
  * Both players run in lock-step from one playhead; only the SELECTED source is
  * audible (the other is muted to volume 0). Each is loudness-normalized to a
  * common RMS target so "sounds cleaner" can't be confused with "sounds louder".
- * The per-track ▶ buttons still work for solo listening; this adds an instant
- * flip on top. Pressing `A` toggles RAW⇄CLEAN. */
+ * The per-track Play buttons still work for solo listening; this adds an instant
+ * flip on top. Pressing `A` toggles RAW/CLEAN. */
 const AB = { side: "clean", rawGain: 1, cleanGain: 1, ready: 0 };
 
 function rmsOfBuffer(ws) {
@@ -1803,7 +1802,7 @@ function applyABVolumes() {
 }
 
 function computeABGains() {
-  const TARGET = 0.08;                       // common RMS target (~−22 dBFS)
+  const TARGET = 0.08;                       // common RMS target (~-22 dBFS)
   const rRaw = rmsOfBuffer(state.wsInput);
   const rClean = rmsOfBuffer(state.wsWinner);
   // Cap make-up gain so a near-silent file can't blast; floor avoids /0.
@@ -1838,11 +1837,11 @@ function setupABCompare() {
     if (!active) return;
     const playing = active.isPlaying();
     // stop the solo per-track buttons' state from lingering
-    qsa(".track-play").forEach(b => { b.textContent = "▶"; b.classList.remove("playing"); });
+    qsa(".track-play").forEach(b => { b.textContent = "Play"; b.classList.remove("playing"); });
     if (playing) {
       if (state.wsInput) state.wsInput.pause();
       if (state.wsWinner) state.wsWinner.pause();
-      play.textContent = "▶"; play.classList.remove("playing");
+      play.textContent = "Play"; play.classList.remove("playing");
     } else {
       // start BOTH from the active player's position so a mid-play flip is gapless
       const t = active.getCurrentTime ? active.getCurrentTime() : 0;
@@ -1852,13 +1851,13 @@ function setupABCompare() {
         try { ws.setTime ? ws.setTime(t) : ws.seekTo(0); } catch {}
         ws.play();
       });
-      play.textContent = "❚❚"; play.classList.add("playing");
+      play.textContent = "Pause"; play.classList.add("playing");
     }
   };
 
   [state.wsInput, state.wsWinner].forEach(ws => {
     if (!ws) return;
-    ws.on("finish", () => { play.textContent = "▶"; play.classList.remove("playing"); });
+    ws.on("finish", () => { play.textContent = "Play"; play.classList.remove("playing"); });
   });
 }
 
@@ -1884,25 +1883,25 @@ window.addEventListener("keydown", e => {
 
 /* Friendly label + one-line detail for each production stage key. */
 const PROD_STAGE_LABELS = {
-  mic_capsules:   ["① Mic capsules",            s => `${s.n_channels} ch · ${s.sr/1000} kHz · ${s.duration_s}s`],
-  mic_health:     ["① Mic health",              s => s.ran ? (s.all_ok ? `all ${s.n_channels} mics OK` : `flagged ${(s.flagged_mics||[]).join(",")} · OK ${s.counts.OK}/${s.n_channels}`) : s.reason],
-  calibrate:      ["② Channel calibration",      s => s.ran ? `gains ${(s.gains_db||[]).map(g=>g.toFixed(1)).join("/")} dB` : s.reason],
-  highpass:       ["③ High-pass filter",         s => s.ran ? `${s.cutoff_hz} Hz · order ${s.order}` : s.reason],
-  noise_floor:    ["③ Noise-floor estimate",     s => s.ran ? `${s.noise_floor_dbfs} dBFS` : s.reason],
-  dereverb_wpe:   ["⑧ Dereverb (WPE front-end)", s => s.ran ? `taps ${s.taps} · iters ${s.iterations}` : s.reason],
-  dereverb_spectral: ["⑧ Dereverb (spectral)",   s => s.ran ? `late-reverb suppress · ${s.rms_change_db} dB` : s.reason],
-  vad:            ["④ VAD / speech detector",    s => s.ran ? `speech ${(s.speech_ratio*100).toFixed(0)}%` : s.reason],
-  track_conditioning: ["⑤ Tracking path",        s => s.ran ? `noise-robust ${(s.band_hz||[]).join("–")} Hz` : s.reason],
-  doa:            ["⑤ DOA / talker tracking",    s => s.ran ? `az ${(s.az_per_block||[]).join("/")}° · spread ${s.az_spread_deg}°` : s.reason],
-  rtf_drift:      ["⑤ RTF-drift movement",        s => s.ran ? `steady ${s.steady_median} · ${s.moved?"moving → tracked":"static → batch"}` : s.reason],
-  beamform:       ["⑥ Beamforming (MVDR 8→1)",   s => s.ran ? `${(s.method||"").replace("_beamform","")} · ${s.blend||""}${s.mask&&s.mask!=="snr"?` · mask:${(s.mask_info&&s.mask_info.picked)||s.mask}`:""}` : s.reason],
-  aec:            ["⑦ AEC (far-end ref)",        s => s.ran ? `ERLE ${s.erle_db} dB${s.n_taps?` · ${s.n_taps} taps`:""}` : s.reason],
-  feedback_risk:  ["⑦ Feedback / howl risk",     s => s.ran ? `${s.risk}${s.suspect_hz?` · ${s.suspect_hz} Hz`:""} (score ${s.risk_score})` : s.reason],
-  noise_reduction:["⑧ Noise reduction",          s => s.ran ? `${s.engine}` : s.reason],
-  residual_suppress:["⑧ Residual suppressor",     s => s.ran ? `strength ${s.strength} · bed ${s.bed_change_db} dB` : s.reason],
-  automix:        ["⑨ Automix / gating",         s => s.ran ? `${s.speech_frames}/${s.total_frames} speech frames` : s.reason],
-  agc_eq_limiter: ["⑩ AGC + EQ + limiter",       s => s.ran ? `AGC ${(s.agc&&s.agc.engine)||"rms"}→${s.agc_target_dbfs} dBFS${s.eq&&s.eq.ran?" · EQ":""} · limit ${s.limiter_ceiling}` : s.reason],
-  output:         ["⑪ Output (WAV)",             s => s.ran ? `norm ${s.gain_db>=0?"+":""}${s.gain_db} dB` : s.reason],
+  mic_capsules:   ["Mic capsules",            s => `${s.n_channels} ch / ${s.sr/1000} kHz / ${s.duration_s}s`],
+  mic_health:     ["Mic health",              s => s.ran ? (s.all_ok ? `all ${s.n_channels} mics OK` : `flagged ${(s.flagged_mics||[]).join(",")} / OK ${s.counts.OK}/${s.n_channels}`) : s.reason],
+  calibrate:      ["Channel calibration",      s => s.ran ? `gains ${(s.gains_db||[]).map(g=>g.toFixed(1)).join("/")} dB` : s.reason],
+  highpass:       ["High-pass filter",         s => s.ran ? `${s.cutoff_hz} Hz / order ${s.order}` : s.reason],
+  noise_floor:    ["Noise-floor estimate",     s => s.ran ? `${s.noise_floor_dbfs} dBFS` : s.reason],
+  dereverb_wpe:   ["Dereverb (WPE front-end)", s => s.ran ? `taps ${s.taps} / iters ${s.iterations}` : s.reason],
+  dereverb_spectral: ["Dereverb (spectral)",   s => s.ran ? `late-reverb suppress / ${s.rms_change_db} dB` : s.reason],
+  vad:            ["VAD / speech detector",    s => s.ran ? `speech ${(s.speech_ratio*100).toFixed(0)}%` : s.reason],
+  track_conditioning: ["Tracking path",        s => s.ran ? `noise-robust ${(s.band_hz||[]).join("-")} Hz` : s.reason],
+  doa:            ["DOA / talker tracking",    s => s.ran ? `az ${(s.az_per_block||[]).join("/")} deg / spread ${s.az_spread_deg} deg` : s.reason],
+  rtf_drift:      ["RTF-drift movement",       s => s.ran ? `steady ${s.steady_median} / ${s.moved?"moving to tracked":"static to batch"}` : s.reason],
+  beamform:       ["Beamforming (MVDR 8-to-1)", s => s.ran ? `${(s.method||"").replace("_beamform","")} / ${s.blend||""}${s.mask&&s.mask!=="snr"?` / mask:${(s.mask_info&&s.mask_info.picked)||s.mask}`:""}` : s.reason],
+  aec:            ["AEC (far-end ref)",        s => s.ran ? `ERLE ${s.erle_db} dB${s.n_taps?` / ${s.n_taps} taps`:""}` : s.reason],
+  feedback_risk:  ["Feedback / howl risk",     s => s.ran ? `${s.risk}${s.suspect_hz?` / ${s.suspect_hz} Hz`:""} (score ${s.risk_score})` : s.reason],
+  noise_reduction:["Noise reduction",          s => s.ran ? `${s.engine}` : s.reason],
+  residual_suppress:["Residual suppressor",    s => s.ran ? `strength ${s.strength} / bed ${s.bed_change_db} dB` : s.reason],
+  automix:        ["Automix / gating",         s => s.ran ? `${s.speech_frames}/${s.total_frames} speech frames` : s.reason],
+  agc_eq_limiter: ["AGC + EQ + limiter",       s => s.ran ? `AGC ${(s.agc&&s.agc.engine)||"rms"} to ${s.agc_target_dbfs} dBFS${s.eq&&s.eq.ran?" / EQ":""} / limit ${s.limiter_ceiling}` : s.reason],
+  output:         ["Output (WAV)",             s => s.ran ? `norm ${s.gain_db>=0?"+":""}${s.gain_db} dB` : s.reason],
 };
 
 /** Render the production stages + per-stage timing into the results table. */
@@ -1919,7 +1918,7 @@ function renderProdStages(stages, timings) {
     try { det = detail(s) || ""; } catch { det = ""; }
     return `
       <div class="prod-stage ${ran ? "ran" : "skip"}">
-        <div class="psg-mark">${ran ? "✓" : "—"}</div>
+        <div class="psg-mark">${ran ? "OK" : "SKIP"}</div>
         <div class="psg-label">${esc(label)}</div>
         <div class="psg-detail">${esc(String(det))}</div>
         <div class="psg-time">${msTxt}</div>
@@ -1927,12 +1926,12 @@ function renderProdStages(stages, timings) {
   }).join("");
   const total = (timings.TOTAL != null) ? `${(timings.TOTAL/1000).toFixed(2)} s` : "";
   $("leaderboard").innerHTML = rows +
-    `<div class="prod-stage prod-stage-total"><div class="psg-mark">Σ</div>
+    `<div class="prod-stage prod-stage-total"><div class="psg-mark">SUM</div>
       <div class="psg-label">Total</div><div class="psg-detail"></div>
       <div class="psg-time">${total}</div></div>`;
 }
 
-/* ── Stage [11]: output-device playout (USB / analog) ── */
+/* Stage [11]: output-device playout (USB / analog) */
 async function loadOutputDevices() {
   const sel = $("playoutDevice");
   if (!sel) return;
@@ -1960,7 +1959,7 @@ async function playToDevice(stem) {
     });
     const j = await r.json();
     if (!r.ok || !j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    toast(`🔊 Playing clean output to device${device!=null?` #${device}`:" (default)"} · ${j.duration_s}s`);
+    toast(`Playing clean output to device${device!=null?` #${device}`:" (default)"} / ${j.duration_s}s`);
   } catch (err) {
     toast(`Playout failed: ${err.message || "unknown error"}`, "error");
   }
@@ -1971,10 +1970,10 @@ async function playToDevice(stem) {
  * pipeline became the only path. Its renderers referenced DOM nodes that no
  * longer exist in index.html, so they are removed outright. `loadVerdict` is
  * kept as a no-op because a few post-mutation callers still invoke it. */
-function loadVerdict() { /* retired — no verdict UI in the production build */ }
+function loadVerdict() { /* retired - no verdict UI in the production build */ }
 
 
-/* ═══════════════════ UTIL ═══════════════════ */
+/* UTIL */
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, m => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
@@ -1982,8 +1981,8 @@ function esc(s) {
 }
 
 /* toast(msg, type, opts?)
- *   opts.action = { label, onClick }  → renders an inline action button (e.g. Undo)
- *   opts.duration                     → override auto-dismiss ms (action toasts last longer)
+ *   opts.action = { label, onClick }  renders an inline action button (e.g. Undo)
+ *   opts.duration                     override auto-dismiss ms (action toasts last longer)
  * Backward compatible: existing toast(msg, type) calls are unaffected. */
 function toast(msg, type, opts) {
   const wrap = $("toastWrap");
@@ -2032,7 +2031,7 @@ function toast(msg, type, opts) {
   const close = document.createElement("button");
   close.className = "toast-close";
   close.setAttribute("aria-label", "Dismiss notification");
-  close.textContent = "×";
+  close.textContent = "X";
   close.addEventListener("click", dismiss);
   t.appendChild(close);
 
@@ -2043,14 +2042,14 @@ function toast(msg, type, opts) {
 }
 
 
-/* ═══════════════════ MODAL ═══════════════════
- * showModal({ icon, title, body, buttons }) → Promise<string>
+/* MODAL
+ * showModal({ icon, title, body, buttons }) -> Promise<string>
  * buttons: [{ id, label, variant: 'primary'|'danger'|'ghost'|undefined }]
  * The promise resolves with the clicked button's id, or "cancel" on Esc /
  * backdrop click. Only one modal can be open at a time. Body accepts HTML.
  */
 let _activeModal = null;
-function showModal({ icon = "ℹ", iconType = "", title, body, buttons }) {
+function showModal({ icon = "INFO", iconType = "", title, body, buttons }) {
   return new Promise(resolve => {
     // Close any existing modal first
     if (_activeModal) _activeModal.close("cancel");
@@ -2089,7 +2088,7 @@ function showModal({ icon = "ℹ", iconType = "", title, body, buttons }) {
     back.querySelectorAll(".modal-btn").forEach(b =>
       b.addEventListener("click", () => close(b.dataset.id)));
 
-    // Backdrop click → cancel
+    // Backdrop click cancels.
     back.addEventListener("click", e => {
       if (e.target === back) close("cancel");
     });
@@ -2106,18 +2105,18 @@ function showModal({ icon = "ℹ", iconType = "", title, body, buttons }) {
   });
 }
 
-/* ═══════════════════ GLOBAL ESC KEY ═══════════════════ */
-/* ═══════════════════ KEYBOARD SHORTCUTS ═══════════════════
- * Esc      — close modal / dismiss toast
- * /        — focus filter search input
- * R        — refresh files
- * ↑/↓      — move focus between file rows
- * Enter    — analyse (or view results for) the focused file
- * D        — delete the focused file (via existing modal)
- * ?        — show shortcuts cheat sheet
+/* GLOBAL ESC KEY */
+/* KEYBOARD SHORTCUTS
+ * Esc      - close modal / dismiss toast
+ * /        - focus filter search input
+ * R        - refresh files
+ * Up/Down  - move focus between file rows
+ * Enter    - analyse (or view results for) the focused file
+ * D        - delete the focused file (via existing modal)
+ * ?        - show shortcuts cheat sheet
  *
  * Shortcuts are suppressed while the user is typing in an input,
- * textarea, contenteditable, or select element — so renaming a file,
+ * textarea, contenteditable, or select element - so renaming a file,
  * typing in the filter box, etc. all work normally.
  */
 function isTypingInField() {
@@ -2149,16 +2148,16 @@ function focusFileRow(idx) {
 
 function showShortcutsHelp() {
   showModal({
-    icon: "⌨",
+    icon: "KEY",
     title: "Keyboard shortcuts",
     body: `
       <div class="shortcuts-grid">
-        <div class="sc-key">↑ / ↓</div><div class="sc-desc">Move between file rows</div>
+        <div class="sc-key">Up / Down</div><div class="sc-desc">Move between file rows</div>
         <div class="sc-key">Enter</div> <div class="sc-desc">Analyse or view the focused file</div>
         <div class="sc-key">D</div>     <div class="sc-desc">Delete the focused file</div>
         <div class="sc-key">R</div>     <div class="sc-desc">Refresh files list</div>
         <div class="sc-key">/</div>     <div class="sc-desc">Jump to filter search</div>
-        <div class="sc-key">A</div>     <div class="sc-desc">Flip RAW⇄CLEAN in the Studio</div>
+        <div class="sc-key">A</div>     <div class="sc-desc">Flip RAW/CLEAN in the Studio</div>
         <div class="sc-key">E</div>     <div class="sc-desc">Open the error log</div>
         <div class="sc-key">Esc</div>   <div class="sc-desc">Close modal or dismiss toast</div>
         <div class="sc-key">?</div>     <div class="sc-desc">Show this help</div>
@@ -2171,7 +2170,7 @@ function showShortcutsHelp() {
 }
 
 window.addEventListener("keydown", e => {
-  // Esc — always works, even in fields
+  // Esc always works, even in fields.
   if (e.key === "Escape") {
     if (_activeModal) { _activeModal.close("cancel"); return; }
     const wrap = $("toastWrap");

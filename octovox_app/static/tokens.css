@@ -1,204 +1,228 @@
 /* ============================================================================
-   OCTOVOX — Design tokens (single source of truth)
-   ----------------------------------------------------------------------------
-   Two layers:
-     1. brand PRIMITIVES (theme-invariant hues)
-     2. SEMANTIC tokens (what components reference) — swapped per theme
-   `:root` = refined dark (default).  `[data-theme="light"]` overrides only what
-   changes.  Scales (radii / spacing / type / motion) live once in `:root`.
-   Old token names are kept as ALIASES at the bottom so legacy rules keep working.
-   Also consumed by JS (WaveSurfer + radar canvas + acoustics SVG) via
-   getComputedStyle — see app.js themeColors() and RoomAcoustics useVizColors().
+   OCTOVOX - Broadcast Studio Console tokens
    ============================================================================ */
 
 :root {
-  /* ---- brand primitives (shared across themes) ---- */
-  --teal-500:#2dd4bf;  --teal-600:#1c8b80;  --teal-300:#5eead4;
-  --violet-400:#a78bfa; --blue-400:#5eb0ef;
-  --amber-400:#f5b14b;  --red-400:#f06363;   --green-400:#34d399;
+  /* brand primitives */
+  --signal-500:#7cff6b;
+  --signal-600:#55d948;
+  --signal-300:#b7ffae;
+  --cyan-400:#38bdf8;
+  --violet-400:#a78bfa;
+  --amber-400:#f59e0b;
+  --red-400:#ef4444;
+  --green-400:#22c55e;
 
-  /* ---- surfaces ---- */
-  --surface:#0b1116;            --surface-sunken:#070c10;
-  --surface-raised:#111a21;     --surface-raised-2:#0e161c;
-  --surface-overlay:#131d25;
-  --surface-hover:rgba(255,255,255,0.045);
-  --surface-active:rgba(255,255,255,0.075);
+  /* surfaces */
+  --surface:#080a0d;
+  --surface-sunken:#0b0f14;
+  --surface-raised:#11161d;
+  --surface-raised-2:#171d26;
+  --surface-overlay:#1a222d;
+  --surface-hover:rgba(124,255,107,0.06);
+  --surface-active:rgba(124,255,107,0.10);
 
-  /* ---- borders ---- */
-  --border:#1d2a33;  --border-strong:#26343f;  --border-accent:var(--teal-600);
+  /* borders */
+  --border:#26303a;
+  --border-strong:#35414f;
+  --border-accent:#5ee253;
 
-  /* ---- text ---- */
-  --text:#e7eef4;  --text-muted:#aebac6;  --text-subtle:#6f8090;
-  --text-on-accent:#04201c;  --text-placeholder:#586674;
+  /* text */
+  --text:#e7edf3;
+  --text-muted:#a7b1be;
+  --text-subtle:#8b98a7;
+  --text-on-accent:#071007;
+  --text-placeholder:#657384;
 
-  /* ---- accent ---- */
-  --accent:var(--teal-500);  --accent-hover:var(--teal-300);
-  --accent-weak:rgba(45,212,191,0.10);  --accent-ring:rgba(45,212,191,0.22);
-  --accent-gradient:linear-gradient(180deg,#2fe0cb,#20b3a3);
+  /* accent */
+  --accent:var(--signal-500);
+  --accent-hover:var(--signal-300);
+  --accent-weak:rgba(124,255,107,0.11);
+  --accent-ring:rgba(124,255,107,0.30);
+  --accent-gradient:linear-gradient(180deg,#94ff84 0%,#62e655 100%);
 
-  /* ---- status ---- */
-  --success:var(--green-400);  --success-weak:rgba(52,211,153,0.10);
-  --warn:var(--amber-400);     --warn-weak:rgba(245,177,75,0.10);
-  --danger:var(--red-400);     --danger-weak:rgba(240,99,99,0.08);  --danger-border:#6b2a2a;
+  /* status */
+  --success:var(--green-400);
+  --success-weak:rgba(34,197,94,0.12);
+  --warn:var(--amber-400);
+  --warn-weak:rgba(245,158,11,0.13);
+  --danger:var(--red-400);
+  --danger-weak:rgba(239,68,68,0.12);
+  --danger-border:#7f2a2a;
 
-  /* ---- data-viz (acoustics SVG charts / axes / series) ---- */
-  --viz-axis:#6f8090;          --viz-grid:rgba(255,255,255,0.07);
-  --viz-series-l:var(--teal-500); --viz-series-w:var(--violet-400); --viz-series-h:var(--blue-400);
-  --viz-optimal:var(--green-400); --viz-lively:var(--amber-400); --viz-reverberant:var(--red-400);
-  --viz-measured:#e7eef4;      --viz-stroke-bg:#0c1318;
+  /* data-viz */
+  --viz-axis:#8b98a7;
+  --viz-grid:rgba(231,237,243,0.09);
+  --viz-series-l:var(--signal-500);
+  --viz-series-w:var(--cyan-400);
+  --viz-series-h:var(--violet-400);
+  --viz-optimal:var(--signal-500);
+  --viz-lively:var(--amber-400);
+  --viz-reverberant:var(--red-400);
+  --viz-measured:#e7edf3;
+  --viz-stroke-bg:#080a0d;
 
-  /* ---- WaveSurfer (read by app.js via getComputedStyle) ---- */
-  --wave-raw:rgba(168,176,196,0.55);  --wave-raw-prog:rgba(168,176,196,1);
-  --wave-clean:rgba(45,212,191,0.50); --wave-clean-prog:#2dd4bf;
-  --wave-cursor:rgba(255,255,255,0.30);
+  /* WaveSurfer */
+  --wave-raw:rgba(139,152,167,0.52);
+  --wave-raw-prog:#a7b1be;
+  --wave-clean:rgba(124,255,107,0.42);
+  --wave-clean-prog:#7cff6b;
+  --wave-cursor:rgba(231,237,243,0.42);
 
-  /* ---- radar canvas (read by app.js) ---- */
-  --radar-ring:#1d2a33;  --radar-spoke:#141e26;  --radar-label:#6f8090;
-  --radar-hub:#334155;   --radar-blip:#475569;
-  --radar-target:#2dd4bf; --radar-target-halo:rgba(45,212,191,0.30);
+  /* radar canvas */
+  --radar-ring:#35414f;
+  --radar-spoke:#26303a;
+  --radar-label:#8b98a7;
+  --radar-hub:#657384;
+  --radar-blip:#8b98a7;
+  --radar-target:#7cff6b;
+  --radar-target-halo:rgba(124,255,107,0.28);
 
-  /* ---- elevation ---- */
-  --elev-1:0 1px 0 rgba(255,255,255,0.02) inset, 0 10px 30px -20px rgba(0,0,0,0.9);
-  --elev-2:0 16px 40px -16px rgba(0,0,0,0.9);
-  --elev-3:0 30px 80px -30px rgba(0,0,0,0.95);
-  --glow-accent:0 6px 20px -8px var(--accent-ring);
+  /* elevation */
+  --elev-1:0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 28px -24px rgba(0,0,0,0.9);
+  --elev-2:0 20px 44px -28px rgba(0,0,0,0.95);
+  --elev-3:0 32px 72px -36px rgba(0,0,0,0.95);
+  --glow-accent:0 0 0 1px rgba(124,255,107,0.20), 0 12px 30px -22px rgba(124,255,107,0.85);
 
-  /* ---- radii ---- */
-  --radius-xs:5px; --radius-sm:7px; --radius-md:9px; --radius-lg:12px;
-  --radius-xl:16px; --radius-pill:999px; --radius:var(--radius-lg);
+  /* radii */
+  --radius-xs:3px;
+  --radius-sm:5px;
+  --radius-md:7px;
+  --radius-lg:9px;
+  --radius-xl:12px;
+  --radius-pill:999px;
+  --radius:var(--radius-md);
 
-  /* ---- spacing (4px base) ---- */
-  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
-  --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px;
+  /* spacing */
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:20px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-10:40px;
 
-  /* ---- type ---- */
+  /* type */
   --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --sans:'Inter', system-ui, -apple-system, sans-serif;
+  --sans:'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
-  /* ---- motion ---- */
+  /* motion */
   --ease-out:cubic-bezier(.2,.8,.3,1);
-  --ease-spring:cubic-bezier(.2,.9,.3,1.2);
-  --dur-fast:.12s; --dur:.18s; --dur-slow:.28s;
+  --ease-spring:cubic-bezier(.2,.9,.3,1.08);
+  --dur-fast:.12s;
+  --dur:.18s;
+  --dur-slow:.28s;
 
-  /* ---- focus ring (one source of truth) ---- */
   --focus-ring:0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 
-  /* ---- app-shell metrics ---- */
-  --sidebar-w:248px; --sidebar-w-collapsed:64px; --head-h:62px;
-  --workspace-max:1240px;
+  /* app shell */
+  --sidebar-w:232px;
+  --sidebar-w-collapsed:64px;
+  --head-h:58px;
+  --workspace-max:1280px;
 
-  /* ===================== BACK-COMPAT ALIASES (old → new) ===================== */
-  --bg:var(--surface);            --bg-2:var(--surface-sunken);
-  --panel:var(--surface-raised);  --panel-2:var(--surface-raised-2);
-  --line:var(--border);           --line-2:var(--border-strong);
-  --text-2:var(--text-muted);     --muted:var(--text-subtle);
-  --teal:var(--accent);           --teal-dim:var(--teal-600);  --teal-glow:var(--accent-ring);
-  --violet:var(--violet-400);     --blue:var(--blue-400);
-  --amber:var(--warn);            --red:var(--danger);         --green:var(--success);
+  /* back-compat aliases */
+  --bg:var(--surface);
+  --bg-2:var(--surface-sunken);
+  --panel:var(--surface-raised);
+  --panel-2:var(--surface-raised-2);
+  --line:var(--border);
+  --line-2:var(--border-strong);
+  --text-2:var(--text-muted);
+  --muted:var(--text-subtle);
+  --teal:var(--accent);
+  --teal-dim:var(--border-accent);
+  --teal-glow:var(--accent-ring);
+  --violet:var(--violet-400);
+  --blue:var(--cyan-400);
+  --amber:var(--warn);
+  --red:var(--danger);
+  --rose:var(--danger);
+  --green:var(--success);
 
-  /* ===================== NEUMORPHISM (soft-UI) LAYER =====================
-     A tactile soft-console surface system layered on top of the semantic
-     tokens above. `:root` carries the DARK neumorphic palette (the app's
-     default theme); `[data-theme="light"]` overrides it below. Components in
-     style.css reference --neo-* for surfaces/shadows/radii while continuing
-     to use --accent / --text / status tokens for colour, so the existing
-     light/dark split and the JS-read viz tokens keep working untouched.
-
-     Dual-shadow model: a LIGHT highlight (top-left) + a DARK shadow
-     (bottom-right) on a single mid-tone surface produce the raised look;
-     inverting them (inset) produces the pressed look. */
-
-  /* dark neumorphic surfaces — deep, low-contrast console tones */
-  --neo-bg:#12171d;
-  --neo-surface:#161c23;
-  --neo-surface-raised:#1b232c;
-  --neo-surface-inset:#10151b;
+  /* legacy soft-UI variable names mapped to the flat console system */
+  --neo-bg:var(--surface);
+  --neo-surface:var(--surface-raised);
+  --neo-surface-raised:var(--surface-raised-2);
+  --neo-surface-inset:var(--surface-sunken);
   --neo-text:var(--text);
   --neo-muted:var(--text-muted);
   --neo-accent:var(--accent);
-  --neo-accent-2:var(--blue-400);
-
-  --neo-shadow-light:rgba(255,255,255,0.045);
-  --neo-shadow-dark:rgba(0,0,0,0.55);
-
-  /* shadow recipes (reference the light/dark vars so the theme swap is free) */
-  --neo-shadow-raised:
-    8px 8px 18px var(--neo-shadow-dark),
-    -8px -8px 16px var(--neo-shadow-light);
-  --neo-shadow-soft:
-    5px 5px 12px var(--neo-shadow-dark),
-    -5px -5px 10px var(--neo-shadow-light);
-  --neo-shadow-inset:
-    inset 5px 5px 11px var(--neo-shadow-dark),
-    inset -5px -5px 10px var(--neo-shadow-light);
-  /* shallow press for small controls (buttons/chips) */
-  --neo-shadow-inset-sm:
-    inset 3px 3px 6px var(--neo-shadow-dark),
-    inset -3px -3px 6px var(--neo-shadow-light);
-  /* accent-tinted glow for primary CTAs / active emphasis */
-  --neo-glow-accent:
-    6px 6px 14px var(--neo-shadow-dark),
-    -6px -6px 12px var(--neo-shadow-light),
-    0 6px 20px -8px var(--accent-ring);
-
-  --neo-radius-xl:28px;
-  --neo-radius-lg:22px;
-  --neo-radius-md:16px;
-  --neo-radius-sm:12px;
+  --neo-accent-2:var(--cyan-400);
+  --neo-shadow-light:rgba(255,255,255,0.04);
+  --neo-shadow-dark:rgba(0,0,0,0.45);
+  --neo-shadow-raised:var(--elev-1);
+  --neo-shadow-soft:0 1px 0 rgba(255,255,255,0.03) inset;
+  --neo-shadow-inset:inset 0 0 0 1px var(--border), inset 0 2px 8px rgba(0,0,0,0.30);
+  --neo-shadow-inset-sm:inset 0 0 0 1px var(--border);
+  --neo-glow-accent:var(--glow-accent);
+  --neo-radius-xl:var(--radius-xl);
+  --neo-radius-lg:var(--radius-lg);
+  --neo-radius-md:var(--radius-md);
+  --neo-radius-sm:var(--radius-sm);
 }
 
-/* ===================== NEUMORPHISM — LIGHT THEME ===================== */
 [data-theme="light"] {
-  --neo-bg:#e9eef5;
-  --neo-surface:#e9eef5;
-  --neo-surface-raised:#eef3f9;
-  --neo-surface-inset:#dfe6ef;
-  --neo-text:var(--text);
-  --neo-muted:var(--text-muted);
-  --neo-accent:var(--accent);
-  --neo-accent-2:#2f7fd1;
-
-  --neo-shadow-light:rgba(255,255,255,0.92);
-  --neo-shadow-dark:rgba(163,177,198,0.55);
-}
-
-/* ============================ LIGHT THEME ============================ */
-[data-theme="light"] {
-  --surface:#eef2f6;            --surface-sunken:#e4ebf1;
-  --surface-raised:#ffffff;     --surface-raised-2:#f6f9fb;
+  --surface:#f4f7fb;
+  --surface-sunken:#e8eef5;
+  --surface-raised:#ffffff;
+  --surface-raised-2:#f8fafc;
   --surface-overlay:#ffffff;
-  --surface-hover:rgba(13,32,44,0.045);
-  --surface-active:rgba(13,32,44,0.08);
+  --surface-hover:rgba(16,185,129,0.07);
+  --surface-active:rgba(16,185,129,0.12);
 
-  --border:#d6dee6;  --border-strong:#c2cdd8;  --border-accent:#0f9b8e;
+  --border:#d4dde8;
+  --border-strong:#b9c7d6;
+  --border-accent:#0f9f68;
 
-  --text:#0d1b22;  --text-muted:#43525e;  --text-subtle:#66788a;
-  --text-on-accent:#04201c;  --text-placeholder:#8593a0;
+  --text:#0b1220;
+  --text-muted:#3f4d5f;
+  --text-subtle:#657384;
+  --text-on-accent:#041008;
+  --text-placeholder:#8794a3;
 
-  /* teal darkened for AA contrast on light surfaces */
-  --accent:#0f9b8e;  --accent-hover:#0c8378;
-  --accent-weak:rgba(15,155,142,0.12);  --accent-ring:rgba(15,155,142,0.28);
-  --accent-gradient:linear-gradient(180deg,#14b5a4,#0e9384);
+  --accent:#0f9f68;
+  --accent-hover:#087b51;
+  --accent-weak:rgba(15,159,104,0.11);
+  --accent-ring:rgba(15,159,104,0.28);
+  --accent-gradient:linear-gradient(180deg,#19bd7f 0%,#0f9f68 100%);
 
-  --success:#0a9d6e;  --success-weak:rgba(10,157,110,0.12);
-  --warn:#b9791a;     --warn-weak:rgba(185,121,26,0.12);
-  --danger:#cf3b3b;   --danger-weak:rgba(207,59,59,0.08);  --danger-border:#e3b4b4;
+  --success:#07875d;
+  --success-weak:rgba(7,135,93,0.12);
+  --warn:#b66f00;
+  --warn-weak:rgba(182,111,0,0.12);
+  --danger:#c93434;
+  --danger-weak:rgba(201,52,52,0.10);
+  --danger-border:#e3b4b4;
 
-  --viz-axis:#66788a;  --viz-grid:rgba(13,27,34,0.09);
-  --viz-series-l:#0f9b8e; --viz-series-w:#7c5cf0; --viz-series-h:#2f7fd1;
-  --viz-optimal:#0a9d6e; --viz-lively:#b9791a; --viz-reverberant:#cf3b3b;
-  --viz-measured:#0d1b22; --viz-stroke-bg:#ffffff;
+  --viz-axis:#657384;
+  --viz-grid:rgba(11,18,32,0.10);
+  --viz-series-l:#0f9f68;
+  --viz-series-w:#0284c7;
+  --viz-series-h:#7c3aed;
+  --viz-optimal:#0f9f68;
+  --viz-lively:#b66f00;
+  --viz-reverberant:#c93434;
+  --viz-measured:#0b1220;
+  --viz-stroke-bg:#ffffff;
 
-  --wave-raw:rgba(80,96,112,0.42);  --wave-raw-prog:rgba(67,82,94,1);
-  --wave-clean:rgba(15,155,142,0.42); --wave-clean-prog:#0f9b8e;
-  --wave-cursor:rgba(13,27,34,0.35);
+  --wave-raw:rgba(82,96,112,0.38);
+  --wave-raw-prog:#526070;
+  --wave-clean:rgba(15,159,104,0.36);
+  --wave-clean-prog:#0f9f68;
+  --wave-cursor:rgba(11,18,32,0.38);
 
-  --radar-ring:#d2dbe3;  --radar-spoke:#e2e8ee;  --radar-label:#66788a;
-  --radar-hub:#9aa8b4;   --radar-blip:#8593a0;
-  --radar-target:#0f9b8e; --radar-target-halo:rgba(15,155,142,0.30);
+  --radar-ring:#c9d5e3;
+  --radar-spoke:#dce5ef;
+  --radar-label:#657384;
+  --radar-hub:#8794a3;
+  --radar-blip:#657384;
+  --radar-target:#0f9f68;
+  --radar-target-halo:rgba(15,159,104,0.28);
 
-  --elev-1:0 1px 2px rgba(13,27,34,0.06), 0 12px 28px -18px rgba(13,27,34,0.30);
-  --elev-2:0 14px 36px -16px rgba(13,27,34,0.28);
-  --elev-3:0 28px 70px -28px rgba(13,27,34,0.35);
-  --glow-accent:0 6px 20px -10px var(--accent-ring);
+  --elev-1:0 1px 2px rgba(11,18,32,0.06), 0 16px 30px -24px rgba(11,18,32,0.30);
+  --elev-2:0 18px 44px -28px rgba(11,18,32,0.28);
+  --elev-3:0 34px 72px -36px rgba(11,18,32,0.34);
+  --glow-accent:0 0 0 1px rgba(15,159,104,0.18), 0 12px 30px -24px rgba(15,159,104,0.75);
 }

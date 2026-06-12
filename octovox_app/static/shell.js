@@ -1,12 +1,12 @@
-/* ═══════════════════════════════════════════════════════════════════
-   OCTOVOX — App shell  (Router + Theme manager + Command palette)
+/* ------------------------------------------------------------------
+   OCTOVOX - App shell  (Router + Theme manager + Command palette)
    Loaded BEFORE app.js. Defines window.Shell at parse time; all DOM
    wiring is deferred to Shell.afterAppInit(), which app.js calls at the
    end of its DOMContentLoaded init (so state + handlers already exist).
-   Globals from app.js (state, toast, showModal, refreshFiles, …) live in
+   Globals from app.js (state, toast, showModal, refreshFiles, ...) live in
    the shared classic-script scope and are referenced by bare name at
    call time (guarded where it matters).
-═══════════════════════════════════════════════════════════════════ */
+------------------------------------------------------------------ */
 (function () {
   "use strict";
   const $ = id => document.getElementById(id);
@@ -21,7 +21,7 @@
   const clickIf = id => { const b = $(id); if (b) b.click(); };
   const selectTab = name => { const t = document.querySelector(`.tab[data-tab="${name}"]`); if (t) t.click(); };
 
-  /* ─────────────────────────── THEME ─────────────────────────── */
+  /* THEME */
   const Theme = {
     KEY: "octovox-theme",
     pref() { try { return localStorage.getItem(this.KEY) || "system"; } catch (e) { return "system"; } },
@@ -38,7 +38,7 @@
     _syncBtn(mode) {
       const tb = $("themeToggle"); if (!tb) return;
       const ico = tb.querySelector(".tt-ico"), lab = tb.querySelector(".tt-lab");
-      if (ico) ico.textContent = mode === "light" ? "☀" : "☾";
+      if (ico) ico.textContent = mode === "light" ? "LIT" : "DRK";
       if (lab) lab.textContent = mode === "light" ? "Light" : "Dark";
     },
     init() {
@@ -51,11 +51,11 @@
     },
   };
 
-  /* ─────────────────────────── ROUTER ─────────────────────────── */
+  /* ROUTER */
   const VIEWS = ["capture", "library", "studio"];
   const META = {
-    capture: { title: "Capture", sub: "Record, upload, or generate — then clean." },
-    library: { title: "Library", sub: "Your recordings — clean, re-view, rename, or delete." },
+    capture: { title: "Capture", sub: "Record, upload, or generate - then clean." },
+    library: { title: "Library", sub: "Your recordings - clean, re-view, rename, or delete." },
     studio:  { title: "Studio",  sub: "Compare raw vs clean, tune the pipeline, export." },
   };
   const Router = {
@@ -83,7 +83,7 @@
       this.current = view;
       qsa(".view").forEach(v => v.classList.toggle("view--active", v.dataset.view === view));
       qsa(".nav-item[data-view]").forEach(n => n.classList.toggle("active", n.dataset.view === view));
-      // Studio is reachable even before a clean — it shows a friendly empty
+      // Studio is reachable even before a clean - it shows a friendly empty
       // state instead of bouncing the user back. Toggle empty vs. console.
       if (view === "studio") this.syncStudioEmpty();
       const m = META[view] || { title: view, sub: "" };
@@ -105,7 +105,7 @@
     Router.fromHash();
   });
 
-  /* ─────────────────────── COMMAND PALETTE ─────────────────────── */
+  /* COMMAND PALETTE */
   const Cmdk = {
     open: false, filtered: [], sel: 0,
     isOpen() { return this.open; },
@@ -216,7 +216,7 @@
   };
 
   /* capture-phase keydown: runs BEFORE app.js's bubble handler so the palette
-     owns Cmd/Ctrl-K, and (when open) arrows/enter/esc — without disturbing
+     owns Cmd/Ctrl-K, and (when open) arrows/enter/esc - without disturbing
      app.js's single-key shortcuts when the palette is closed. */
   window.addEventListener("keydown", e => {
     const k = e.key;
@@ -233,15 +233,15 @@
     }
   }, true);
 
-  /* ─────────────────────── SHELL BOOTSTRAP ─────────────────────── */
+  /* SHELL BOOTSTRAP */
   function wireSidebar() {
     const toggle = $("sidebarToggle");
     const shell = document.querySelector(".shell");
     if (toggle && shell) toggle.addEventListener("click", () => shell.classList.toggle("sidebar-open"));
-    // nav-items use href="#/view" → hashchange drives the router; no extra handler needed,
+    // nav-items use href="#/view"; hashchange drives the router.
     // except the external Acoustics link which is a real navigation (left as-is).
     qsa(".nav-item[data-view]").forEach(n => n.addEventListener("click", e => {
-      // Studio now opens to an empty state when nothing is cleaned yet —
+      // Studio now opens to an empty state when nothing is cleaned yet -
       // route normally (no bounce, no special-casing needed).
     }));
     // Empty-Studio call-to-action buttons.
