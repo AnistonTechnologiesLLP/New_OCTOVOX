@@ -19,7 +19,7 @@ import {
   type SurfaceKey,
 } from '../acoustics';
 
-/** Read a CSS custom property off <html> — live, so the SVG charts follow the
+/** Read a CSS custom property off <html> - live, so the SVG charts follow the
  *  shared design tokens (and the light/dark theme) without hard-coded colours. */
 function cssVar(name: string, fallback: string): string {
   if (typeof window === 'undefined') return fallback;
@@ -27,7 +27,7 @@ function cssVar(name: string, fallback: string): string {
   return v || fallback;
 }
 
-/** Chart colours, read live from the design tokens (getters → re-read every
+/** Chart colours, read live from the design tokens (getters re-read every
  *  render). Paired with useThemeTick() so charts recolour when the theme flips. */
 const C = {
   get optimal() { return cssVar('--viz-optimal', '#34d399'); },
@@ -59,7 +59,7 @@ function useThemeTick(): void {
   }, []);
 }
 
-/** Light/dark toggle — shares the console's localStorage key + data-theme
+/** Light/dark toggle - shares the console's localStorage key + data-theme
  *  contract, so the choice persists across both pages. */
 function ThemeToggle(): ReactElement {
   const [mode, setMode] = useState<string>(() =>
@@ -73,7 +73,7 @@ function ThemeToggle(): ReactElement {
   };
   return (
     <button className="back theme-toggle-btn" onClick={flip} title="Toggle light / dark">
-      {mode === 'light' ? '☀ Light' : '☾ Dark'}
+      {mode === 'light' ? 'Light' : 'Dark'}
     </button>
   );
 }
@@ -81,7 +81,7 @@ function ThemeToggle(): ReactElement {
 /**
  * Thin React presentation layer over the acoustics engine. All computation
  * happens in the engine; this component only gathers inputs and renders the
- * results — no acoustics math lives here.
+ * results - no acoustics math lives here.
  */
 export function RoomAcoustics(): ReactElement {
   const [dimensions, setDimensions] = useState<RoomDimensions>({ L: 5, W: 4, H: 3 });
@@ -113,9 +113,9 @@ export function RoomAcoustics(): ReactElement {
   const audioRef = useRef<AudioContext | null>(null);
   const [playing, setPlaying] = useState(false);
 
-  // ── Functional bridge to OCTOVOX: measure RT60 from a real recording. ──
+  // Functional bridge to OCTOVOX: measure RT60 from a real recording.
   // `recordings === null` means the OCTOVOX API isn't reachable (e.g. standalone
-  // dev) → the whole panel hides, so the app still works on its own.
+  // dev) the whole panel hides, so the app still works on its own.
   const [recordings, setRecordings] = useState<string[] | null>(null);
   const [selectedFile, setSelectedFile] = useState('');
   const [measured, setMeasured] = useState<MeasuredRT60Point[] | null>(null);
@@ -135,7 +135,7 @@ export function RoomAcoustics(): ReactElement {
           setSelectedFile((cur) => cur || names[0] || '');
         }
       } catch {
-        if (!cancelled) setRecordings(null); // OCTOVOX not present → hide the panel
+        if (!cancelled) setRecordings(null); // OCTOVOX not present, hide the panel.
       }
     })();
     return () => {
@@ -163,7 +163,7 @@ export function RoomAcoustics(): ReactElement {
       if (!json.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       if (!json.ran || !json.bands) {
         setMeasured(null);
-        setMeasureNote('No reliable decays found — the recording may lack speech pauses or reverb.');
+        setMeasureNote('No reliable decays found - the recording may lack speech pauses or reverb.');
         return;
       }
       setMeasured(json.bands.map((b) => ({ band: b.band, rt60: b.rt60 })));
@@ -209,7 +209,7 @@ export function RoomAcoustics(): ReactElement {
     <div className="app">
       <div className="topbar-row">
         <a className="back" href="/">
-          ↩ OCTOVOX console
+          Back to OCTOVOX console
         </a>
         <ThemeToggle />
       </div>
@@ -220,7 +220,7 @@ export function RoomAcoustics(): ReactElement {
         </h1>
         <p className="lede">
           RT60 (Eyring) and axial room modes from room geometry and surface materials. A statistical
-          estimate for shoebox rooms — see the <code>README</code> limitations.
+          estimate for shoebox rooms - see the <code>README</code> limitations.
         </p>
       </header>
 
@@ -272,15 +272,15 @@ export function RoomAcoustics(): ReactElement {
               sub={categoryFor(model.rt500).label}
               accent={categoryFor(model.rt500).color}
             />
-            <Metric label="Room volume" value={`${model.roomVolume.toFixed(1)} m³`} accent={AXIS_COLORS.W} />
+            <Metric label="Room volume" value={`${model.roomVolume.toFixed(1)} m^3`} accent={AXIS_COLORS.W} />
             <Metric
               label="Lowest mode"
-              value={model.lowest ? `${model.lowest.freq.toFixed(1)} Hz` : '—'}
+              value={model.lowest ? `${model.lowest.freq.toFixed(1)} Hz` : '-'}
               sub={model.lowest ? `axis ${model.lowest.axis}` : undefined}
               accent={AXIS_COLORS.H}
             />
             <button type="button" className="btn-auralize" onClick={handleAuralize} disabled={playing}>
-              {playing ? 'Auralizing…' : '▶ Auralize'}
+              {playing ? 'Auralizing...' : 'Auralize'}
             </button>
           </section>
 
@@ -315,7 +315,7 @@ export function RoomAcoustics(): ReactElement {
                   onClick={handleMeasure}
                   disabled={!selectedFile || measuring}
                 >
-                  {measuring ? 'Measuring…' : 'Measure RT60'}
+                  {measuring ? 'Measuring...' : 'Measure RT60'}
                 </button>
                 {measured !== null && (
                   <button
@@ -344,12 +344,12 @@ export function RoomAcoustics(): ReactElement {
         </>
       )}
 
-      <p className="foot">Room Acoustics Estimator · part of the OCTOVOX toolkit</p>
+      <p className="foot">Room Acoustics Estimator / part of the OCTOVOX toolkit</p>
     </div>
   );
 }
 
-/* ───────────────────────── presentational helpers ───────────────────────── */
+/* presentational helpers */
 
 /** RT60 quality band per the spec: optimal / lively / reverberant. */
 function categoryFor(rt60: number): { label: string; color: string } {
@@ -460,7 +460,7 @@ function ComparisonStrip({ rows }: { rows: readonly RT60Comparison[] }): ReactEl
   return (
     <div className="cmp">
       <div className="cmp-head">
-        Predicted vs measured · <span style={{ color: C.measured }}>○ measured</span> overlaid above
+        Predicted vs measured / <span style={{ color: C.measured }}>measured</span> overlaid above
       </div>
       <div className="cmp-grid">
         {rows.map((r) => (
@@ -468,9 +468,9 @@ function ComparisonStrip({ rows }: { rows: readonly RT60Comparison[] }): ReactEl
             <div className="cmp-band">{r.band} Hz</div>
             <div className="cmp-vals">
               <span title="predicted">{r.predicted.toFixed(2)}</span>
-              <span className="cmp-sep">→</span>
+              <span className="cmp-sep">to</span>
               <span title="measured" style={{ color: C.measured }}>
-                {r.measured === null ? '—' : r.measured.toFixed(2)}
+                {r.measured === null ? '-' : r.measured.toFixed(2)}
               </span>
             </div>
             <div className="cmp-delta" style={{ color: deltaColor(r.deltaSec) }}>
@@ -494,7 +494,7 @@ function ModesChart({ modes }: { modes: readonly RoomMode[] }): ReactElement {
     <svg viewBox={`0 0 ${width} ${height}`} className="chart" role="img" aria-label="Axial mode frequencies">
       <rect x={pad} y={pad} width={x(DEFAULT_MODE_CUTOFF) - pad} height={height - pad * 2} fill={C.band} rx={4} />
       <text x={pad + 6} y={pad + 14} fontSize={10} fill={C.axis}>
-        &lt; {DEFAULT_MODE_CUTOFF} Hz · bass-buildup zone
+        &lt; {DEFAULT_MODE_CUTOFF} Hz / bass-buildup zone
       </text>
       <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke={C.baseline} />
       {modes.map((m, i) => {
@@ -519,7 +519,7 @@ function ModesChart({ modes }: { modes: readonly RoomMode[] }): ReactElement {
         </text>
       ))}
       <text x={width / 2} y={height - 4} textAnchor="middle" fontSize={11} fill={C.axis}>
-        Frequency (Hz) — {lowFreq.length} mode{lowFreq.length === 1 ? '' : 's'} below {DEFAULT_MODE_CUTOFF} Hz
+        Frequency (Hz) - {lowFreq.length} mode{lowFreq.length === 1 ? '' : 's'} below {DEFAULT_MODE_CUTOFF} Hz
       </text>
       {(Object.keys(AXIS_COLORS) as RoomMode['axis'][]).map((axis, i) => (
         <g key={axis} transform={`translate(${width - pad - 96 + i * 34}, ${pad - 6})`}>
@@ -537,7 +537,7 @@ function Legend({ measured = false }: { measured?: boolean }): ReactElement {
   const items = [
     { label: '< 0.8 s optimal', color: C.optimal },
     { label: '< 1.2 s lively', color: C.lively },
-    { label: '≥ 1.2 s reverberant', color: C.reverberant },
+    { label: '>= 1.2 s reverberant', color: C.reverberant },
   ];
   return (
     <div className="legend">

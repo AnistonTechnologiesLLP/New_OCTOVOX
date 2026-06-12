@@ -1,0 +1,275 @@
+/* ============================================================================
+   OCTOVOX design tokens — light-first minimal.
+
+   Token NAMES mirror the legacy octovox_app/static/tokens.css exactly so that
+   canvas/WaveSurfer code reading them via getComputedStyle keeps working and
+   the /acoustics sub-app can share the same values. :root holds the light
+   palette (default); [data-theme="dark"] holds the dark overrides — the
+   inverse of the legacy dark-first file.
+   ============================================================================ */
+
+:root {
+  /* brand primitives — signal-500 is AA-safe (≥4.5:1) under white text */
+  --signal-500:#0c8157;
+  --signal-600:#096745;
+  --signal-300:#0f9f68;
+  --cyan-400:#0284c7;
+  --violet-400:#7c3aed;
+  --amber-400:#b66f00;
+  --red-400:#c93434;
+  --green-400:#07875d;
+
+  /* surfaces */
+  --surface:#ffffff;
+  --surface-sunken:#f4f6f9;
+  --surface-raised:#ffffff;
+  --surface-raised-2:#f8fafc;
+  --surface-overlay:#ffffff;
+  --surface-hover:rgba(15,159,104,0.06);
+  --surface-active:rgba(15,159,104,0.10);
+
+  /* borders */
+  --border:#e4e9f0;
+  --border-strong:#cdd7e2;
+  --border-accent:#0f9f68;
+
+  /* text */
+  --text:#16202e;
+  --text-muted:#4b5a6c;
+  --text-subtle:#6d7c8e;
+  --text-on-accent:#ffffff;
+  --text-placeholder:#93a0af;
+
+  /* accent */
+  --accent:var(--signal-500);
+  --accent-hover:var(--signal-600);
+  --accent-weak:rgba(12,129,87,0.10);
+  --accent-ring:rgba(12,129,87,0.26);
+  --accent-gradient:linear-gradient(180deg,#0f9f68 0%,#0c8157 100%);
+
+  /* status */
+  --success:var(--green-400);
+  --success-weak:rgba(7,135,93,0.10);
+  --warn:var(--amber-400);
+  --warn-weak:rgba(182,111,0,0.10);
+  --danger:var(--red-400);
+  --danger-weak:rgba(201,52,52,0.08);
+  --danger-border:#ecc8c8;
+
+  /* data-viz */
+  --viz-axis:#6d7c8e;
+  --viz-grid:rgba(22,32,46,0.08);
+  --viz-series-l:var(--signal-500);
+  --viz-series-w:var(--cyan-400);
+  --viz-series-h:var(--violet-400);
+  --viz-optimal:var(--signal-500);
+  --viz-lively:var(--amber-400);
+  --viz-reverberant:var(--red-400);
+  --viz-measured:#16202e;
+  --viz-stroke-bg:#ffffff;
+
+  /* WaveSurfer */
+  --wave-raw:rgba(109,124,142,0.40);
+  --wave-raw-prog:#4b5a6c;
+  --wave-clean:rgba(15,159,104,0.38);
+  --wave-clean-prog:#0f9f68;
+  --wave-cursor:rgba(22,32,46,0.38);
+
+  /* radar canvas */
+  --radar-ring:#cdd7e2;
+  --radar-spoke:#e4e9f0;
+  --radar-label:#6d7c8e;
+  --radar-hub:#93a0af;
+  --radar-blip:#6d7c8e;
+  --radar-target:#0f9f68;
+  --radar-target-halo:rgba(15,159,104,0.25);
+
+  /* elevation */
+  --elev-1:0 1px 2px rgba(22,32,46,0.05), 0 10px 24px -20px rgba(22,32,46,0.18);
+  --elev-2:0 14px 36px -22px rgba(22,32,46,0.22);
+  --elev-3:0 28px 64px -32px rgba(22,32,46,0.28);
+  --glow-accent:0 0 0 1px rgba(15,159,104,0.16), 0 12px 28px -22px rgba(15,159,104,0.55);
+
+  /* radii */
+  --radius-xs:4px;
+  --radius-sm:6px;
+  --radius-md:8px;
+  --radius-lg:10px;
+  --radius-xl:14px;
+  --radius-pill:999px;
+  --radius:var(--radius-md);
+
+  /* spacing */
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:20px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-10:40px;
+
+  /* type */
+  --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --fs-xs:0.75rem;
+  --fs-sm:0.8125rem;
+  --fs-base:0.875rem;
+  --fs-md:1rem;
+  --fs-lg:1.125rem;
+  --fs-xl:1.375rem;
+  --fs-2xl:1.75rem;
+
+  /* motion */
+  --ease-out:cubic-bezier(.2,.8,.3,1);
+  --ease-spring:cubic-bezier(.2,.9,.3,1.08);
+  --dur-fast:.12s;
+  --dur:.18s;
+  --dur-slow:.28s;
+
+  --focus-ring:0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+
+  /* app shell */
+  --appbar-h:56px;
+  --bottombar-h:60px;
+  --filerail-w:248px;
+  --settings-w:312px;
+  --content-max:1200px;
+  /* legacy shell names kept for compatibility */
+  --sidebar-w:232px;
+  --sidebar-w-collapsed:64px;
+  --head-h:56px;
+  --workspace-max:1200px;
+
+  /* back-compat aliases */
+  --bg:var(--surface);
+  --bg-2:var(--surface-sunken);
+  --panel:var(--surface-raised);
+  --panel-2:var(--surface-raised-2);
+  --line:var(--border);
+  --line-2:var(--border-strong);
+  --text-2:var(--text-muted);
+  --muted:var(--text-subtle);
+  --teal:var(--accent);
+  --teal-dim:var(--border-accent);
+  --teal-glow:var(--accent-ring);
+  --violet:var(--violet-400);
+  --blue:var(--cyan-400);
+  --amber:var(--warn);
+  --red:var(--danger);
+  --rose:var(--danger);
+  --green:var(--success);
+
+  /* legacy soft-UI variable names mapped to the flat system */
+  --neo-bg:var(--surface);
+  --neo-surface:var(--surface-raised);
+  --neo-surface-raised:var(--surface-raised-2);
+  --neo-surface-inset:var(--surface-sunken);
+  --neo-text:var(--text);
+  --neo-muted:var(--text-muted);
+  --neo-accent:var(--accent);
+  --neo-accent-2:var(--cyan-400);
+  --neo-shadow-light:rgba(255,255,255,0.9);
+  --neo-shadow-dark:rgba(22,32,46,0.10);
+  --neo-shadow-raised:var(--elev-1);
+  --neo-shadow-soft:0 1px 2px rgba(22,32,46,0.05);
+  --neo-shadow-inset:inset 0 0 0 1px var(--border), inset 0 2px 6px rgba(22,32,46,0.06);
+  --neo-shadow-inset-sm:inset 0 0 0 1px var(--border);
+  --neo-glow-accent:var(--glow-accent);
+  --neo-radius-xl:var(--radius-xl);
+  --neo-radius-lg:var(--radius-lg);
+  --neo-radius-md:var(--radius-md);
+  --neo-radius-sm:var(--radius-sm);
+}
+
+[data-theme="dark"] {
+  /* brand primitives (calmer than the legacy neon console) */
+  --signal-500:#34d399;
+  --signal-600:#10b981;
+  --signal-300:#6ee7b9;
+  --cyan-400:#38bdf8;
+  --violet-400:#a78bfa;
+  --amber-400:#fbbf24;
+  --red-400:#f87171;
+  --green-400:#34d399;
+
+  /* surfaces */
+  --surface:#0c1117;
+  --surface-sunken:#090d12;
+  --surface-raised:#121922;
+  --surface-raised-2:#18212c;
+  --surface-overlay:#1b2530;
+  --surface-hover:rgba(52,211,153,0.06);
+  --surface-active:rgba(52,211,153,0.10);
+
+  /* borders */
+  --border:#26303c;
+  --border-strong:#36424f;
+  --border-accent:#34d399;
+
+  /* text */
+  --text:#e6ecf2;
+  --text-muted:#a6b1bf;
+  --text-subtle:#8a97a6;
+  --text-on-accent:#06281c;
+  --text-placeholder:#657385;
+
+  /* accent */
+  --accent:var(--signal-500);
+  --accent-hover:var(--signal-300);
+  --accent-weak:rgba(52,211,153,0.11);
+  --accent-ring:rgba(52,211,153,0.30);
+  --accent-gradient:linear-gradient(180deg,#4ade9f 0%,#22c98a 100%);
+
+  /* status */
+  --success:var(--green-400);
+  --success-weak:rgba(52,211,153,0.12);
+  --warn:var(--amber-400);
+  --warn-weak:rgba(251,191,36,0.12);
+  --danger:var(--red-400);
+  --danger-weak:rgba(248,113,113,0.12);
+  --danger-border:#7f2a2a;
+
+  /* data-viz */
+  --viz-axis:#8a97a6;
+  --viz-grid:rgba(230,236,242,0.09);
+  --viz-series-l:var(--signal-500);
+  --viz-series-w:var(--cyan-400);
+  --viz-series-h:var(--violet-400);
+  --viz-optimal:var(--signal-500);
+  --viz-lively:var(--amber-400);
+  --viz-reverberant:var(--red-400);
+  --viz-measured:#e6ecf2;
+  --viz-stroke-bg:#0c1117;
+
+  /* WaveSurfer */
+  --wave-raw:rgba(138,151,166,0.45);
+  --wave-raw-prog:#a6b1bf;
+  --wave-clean:rgba(52,211,153,0.40);
+  --wave-clean-prog:#34d399;
+  --wave-cursor:rgba(230,236,242,0.42);
+
+  /* radar canvas */
+  --radar-ring:#36424f;
+  --radar-spoke:#26303c;
+  --radar-label:#8a97a6;
+  --radar-hub:#657385;
+  --radar-blip:#8a97a6;
+  --radar-target:#34d399;
+  --radar-target-halo:rgba(52,211,153,0.28);
+
+  /* elevation */
+  --elev-1:0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 28px -24px rgba(0,0,0,0.9);
+  --elev-2:0 20px 44px -28px rgba(0,0,0,0.9);
+  --elev-3:0 32px 72px -36px rgba(0,0,0,0.95);
+  --glow-accent:0 0 0 1px rgba(52,211,153,0.20), 0 12px 30px -22px rgba(52,211,153,0.6);
+
+  --focus-ring:0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+
+  /* soft-UI legacy shadows */
+  --neo-shadow-light:rgba(255,255,255,0.04);
+  --neo-shadow-dark:rgba(0,0,0,0.45);
+  --neo-shadow-soft:0 1px 0 rgba(255,255,255,0.03) inset;
+  --neo-shadow-inset:inset 0 0 0 1px var(--border), inset 0 2px 8px rgba(0,0,0,0.30);
+  --neo-shadow-inset-sm:inset 0 0 0 1px var(--border);
+}

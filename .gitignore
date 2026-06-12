@@ -13,6 +13,7 @@ htmlcov/
 .ruff_cache/
 
 # Runtime artifacts
+*.log
 data/output/*
 !data/output/.gitkeep
 octovox_app/static/uploads/mic.*

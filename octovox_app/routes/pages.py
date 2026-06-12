@@ -1,18 +1,24 @@
 """Page and output-file-serving routes (non-API)."""
-from flask import Blueprint, render_template, send_from_directory
+from flask import Blueprint, send_from_directory
 
 from ..config import OUTPUT_DIR, STATIC_DIR
-from ..services import pipeline as ov
 
 pages_bp = Blueprint("pages", __name__)
 
 
 @pages_bp.route("/")
 def index():
-    return render_template("index.html",
-                           has_dfn=ov.HAS_DFN,
-                           has_wpe=ov.HAS_WPE,
-                           has_vad=ov.HAS_VAD)
+    """Serve the OCTOVOX console (a Vite/React app built by ``frontend/`` into
+    ``static/ui/``; its assets load from ``/static/ui/``). Engine capability
+    flags come from GET /api/env (the old template injection is retired)."""
+    return send_from_directory(str(STATIC_DIR / "ui"), "index.html")
+
+
+@pages_bp.route("/ui")
+def new_ui_alias():
+    """Cutover alias kept for one release: /ui was the side-by-side preview
+    URL during the UI rebuild. Remove after the next release."""
+    return send_from_directory(str(STATIC_DIR / "ui"), "index.html")
 
 
 @pages_bp.route("/acoustics")
